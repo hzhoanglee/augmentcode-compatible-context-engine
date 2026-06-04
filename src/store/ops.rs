@@ -360,3 +360,278 @@ pub async fn count_indexed_files(db: &Surreal<Db>, repo: &str) -> Result<u64> {
         .take(0)?;
     Ok(rows.first().map(|r| r.count as u64).unwrap_or(0))
 }
+
+// ─── Index Explorer queries (read-only, bounded) ──────────────────────────
+//
+// Every helper below is capped with LIMIT or a count aggregate so a
+// Linux-kernel-scale index never streams unbounded rows into the HTTP layer
+// or the browser. Embeddings are reduced to their length server-side
+// (`array::len`) so the float vectors never cross the wire.
+
+#[derive(Deserialize)]
+struct CountRow {
+    count: i64,
+}
+
+/// Total chunk rows stored (whole DB — one DB per repo, so this is per-repo).
+pub async fn count_chunks(db: &Surreal<Db>) -> Result<u64> {
+    let rows: Vec<CountRow> = db
+        .query("SELECT count() AS count FROM chunk GROUP ALL")
+        .await
+        .context("count chunks")?
+        .take(0)?;
+    Ok(rows.first().map(|r| r.count as u64).unwrap_or(0))
+}
+
+/// Total symbol rows stored.
+pub async fn count_symbols(db: &Surreal<Db>) -> Result<u64> {
+    let rows: Vec<CountRow> = db
+        .query("SELECT count() AS count FROM symbol GROUP ALL")
+        .await
+        .context("count symbols")?
+        .take(0)?;
+    Ok(rows.first().map(|r| r.count as u64).unwrap_or(0))
+}
+
+/// Sample one stored embedding's dimensionality, or 0 if none embedded yet.
+pub async fn sample_embedding_dim(db: &Surreal<Db>) -> Result<u64> {
+    let rows: Vec<CountRow> = db
+        .query(
+            "SELECT array::len(embedding) AS count FROM chunk \
+             WHERE embedding != [] LIMIT 1",
+        )
+        .await
+        .context("sample embedding dim")?
+        .take(0)?;
+    Ok(rows.first().map(|r| r.count.max(0) as u64).unwrap_or(0))
+}
+
+/// One row in the file browser: path, language-agnostic metadata, and chunk count.
+#[derive(Debug, Clone, Serialize)]
+pub struct FileBrowserRow {
+    pub path: String,
+    pub mtime: i64,
+    pub size: i64,
+    pub chunks: u64,
+}
+
+/// Return a bounded, alphabetically-ordered page of indexed files for a repo,
+/// each annotated with its chunk count. `limit` is hard-capped by the caller.
+pub async fn files_page(
+    db: &Surreal<Db>,
+    repo: &str,
+    limit: usize,
+) -> Result<Vec<FileBrowserRow>> {
+    #[derive(Deserialize)]
+    struct MetaRow {
+        path: String,
+        mtime: i64,
+        size: i64,
+    }
+
+    let metas: Vec<MetaRow> = db
+        .query(
+            "SELECT path, mtime, size FROM file_meta \
+             WHERE repo = $repo ORDER BY path LIMIT $limit",
+        )
+        .bind(("repo", repo.to_string()))
+        .bind(("limit", limit as i64))
+        .await
+        .context("files_page: file_meta")?
+        .take(0)?;
+
+    // Chunk counts grouped by file in a single query, then joined in memory.
+    #[derive(Deserialize)]
+    struct GroupRow {
+        file: String,
+        count: i64,
+    }
+    let groups: Vec<GroupRow> = db
+        .query("SELECT file, count() AS count FROM chunk GROUP BY file")
+        .await
+        .context("files_page: chunk counts")?
+        .take(0)?;
+
+    let mut counts: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    for g in groups {
+        counts.insert(g.file, g.count.max(0) as u64);
+    }
+
+    Ok(metas
+        .into_iter()
+        .map(|m| FileBrowserRow {
+            chunks: counts.get(&m.path).copied().unwrap_or(0),
+            path: m.path,
+            mtime: m.mtime,
+            size: m.size,
+        })
+        .collect())
+}
+
+/// A chunk detail row (no embedding floats — only the dimension count).
+#[derive(Debug, Clone, Serialize)]
+pub struct ChunkDetailRow {
+    pub line_start: i64,
+    pub line_end: i64,
+    pub content: String,
+    pub embedding_dim: u64,
+    pub symbol: Option<String>,
+}
+
+/// Return the chunks for a single file, ordered by line, bounded by `limit`.
+pub async fn chunks_for_file(
+    db: &Surreal<Db>,
+    file: &str,
+    limit: usize,
+) -> Result<Vec<ChunkDetailRow>> {
+    #[derive(Deserialize)]
+    struct Row {
+        line_start: i64,
+        line_end: i64,
+        content: String,
+        embedding_dim: i64,
+        symbol_ref: Option<String>,
+    }
+    let rows: Vec<Row> = db
+        .query(
+            "SELECT line_start, line_end, content, \
+             array::len(embedding) AS embedding_dim, symbol_ref \
+             FROM chunk WHERE file = $file ORDER BY line_start LIMIT $limit",
+        )
+        .bind(("file", file.to_string()))
+        .bind(("limit", limit as i64))
+        .await
+        .context("chunks_for_file")?
+        .take(0)?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| ChunkDetailRow {
+            line_start: r.line_start,
+            line_end: r.line_end,
+            content: r.content,
+            embedding_dim: r.embedding_dim.max(0) as u64,
+            symbol: r.symbol_ref.as_deref().and_then(strip_symbol_ref),
+        })
+        .collect())
+}
+
+/// A node in the call graph (one symbol).
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphNode {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub file: String,
+    pub line_start: i64,
+    pub line_end: i64,
+}
+
+/// An edge in the call graph (caller → callee).
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphEdge {
+    pub source: String,
+    pub target: String,
+}
+
+/// The call graph payload: nodes + edges, both bounded.
+#[derive(Debug, Clone, Serialize)]
+pub struct CallGraph {
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+    /// True if the result was capped (more edges/symbols exist in the index).
+    pub truncated: bool,
+}
+
+/// Build a bounded node-link view of the `calls` relation.
+///
+/// Strategy: take up to `edge_limit` call edges, collect the symbols they touch
+/// (capped at `node_limit`), then emit the induced subgraph. Edges referencing a
+/// symbol that was dropped by the node cap are themselves dropped, so the graph
+/// is always internally consistent.
+pub async fn call_graph(
+    db: &Surreal<Db>,
+    edge_limit: usize,
+    node_limit: usize,
+) -> Result<CallGraph> {
+    // Symbol endpoints are stored as record links; fetch FQN + metadata via the
+    // relation's in/out, plus the file fields already denormalized on the edge.
+    #[derive(Deserialize)]
+    struct EdgeRow {
+        #[serde(rename = "in_name")]
+        in_name: Option<String>,
+        #[serde(rename = "out_name")]
+        out_name: Option<String>,
+        in_file: String,
+        out_file: String,
+    }
+
+    let edge_rows: Vec<EdgeRow> = db
+        .query(
+            "SELECT in.name AS in_name, out.name AS out_name, in_file, out_file \
+             FROM calls LIMIT $limit",
+        )
+        .bind(("limit", edge_limit as i64))
+        .await
+        .context("call_graph: edges")?
+        .take(0)?;
+
+    let total_edges = edge_rows.len();
+
+    // Pull symbol metadata for nodes (bounded). Keyed by file::name.
+    #[derive(Deserialize)]
+    struct SymRow {
+        name: String,
+        kind: String,
+        file: String,
+        line_start: i64,
+        line_end: i64,
+    }
+    let sym_rows: Vec<SymRow> = db
+        .query(
+            "SELECT name, kind, file, line_start, line_end FROM symbol LIMIT $limit",
+        )
+        .bind(("limit", node_limit as i64))
+        .await
+        .context("call_graph: symbols")?
+        .take(0)?;
+
+    let mut nodes: Vec<GraphNode> = Vec::with_capacity(sym_rows.len());
+    let mut node_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for s in sym_rows {
+        let id = format!("{}::{}", s.file, s.name);
+        if node_ids.insert(id.clone()) {
+            nodes.push(GraphNode {
+                id,
+                name: s.name,
+                kind: s.kind,
+                file: s.file,
+                line_start: s.line_start,
+                line_end: s.line_end,
+            });
+        }
+    }
+
+    let mut edges: Vec<GraphEdge> = Vec::new();
+    for e in edge_rows {
+        let (in_name, out_name) = match (e.in_name, e.out_name) {
+            (Some(i), Some(o)) => (i, o),
+            _ => continue,
+        };
+        let source = format!("{}::{}", e.in_file, in_name);
+        let target = format!("{}::{}", e.out_file, out_name);
+        if node_ids.contains(&source) && node_ids.contains(&target) {
+            edges.push(GraphEdge { source, target });
+        }
+    }
+
+    let truncated = total_edges >= edge_limit || nodes.len() >= node_limit;
+    Ok(CallGraph { nodes, edges, truncated })
+}
+
+/// Strip the stored `symbol:⟨fqn⟩` wrapper and return just the symbol name.
+fn strip_symbol_ref(s: &str) -> Option<String> {
+    s.strip_prefix("symbol:⟨")
+        .and_then(|s| s.strip_suffix("⟩"))
+        .map(|fqn| fqn.rsplit("::").next().unwrap_or(fqn).to_string())
+}

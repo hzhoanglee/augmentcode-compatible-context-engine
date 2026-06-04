@@ -44,6 +44,7 @@ pub async fn start_watcher(repo_path: String, tx: Sender<IndexTrigger>) {
                     let trigger = IndexTrigger {
                         repo: repo_inner.clone(),
                         changes: Some(changes),
+                        rebuild: false,
                     };
                     // Non-blocking send; if channel is full, drop (will recover on next poll).
                     let _ = tx_inner.try_send(trigger);
@@ -89,6 +90,7 @@ async fn run_polling_fallback(repo_path: String, tx: Sender<IndexTrigger>) {
         let trigger = IndexTrigger {
             repo: repo_path.clone(),
             changes: None, // full incremental scan
+            rebuild: false,
         };
         if tx.send(trigger).await.is_err() {
             error!(repo = %repo_path, "trigger channel closed; stopping polling");

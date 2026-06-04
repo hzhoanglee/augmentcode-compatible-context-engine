@@ -38,10 +38,12 @@ impl IndexPipeline {
     /// Run the pipeline.
     /// - `changes = None` → incremental scan (detect changes from mtime).
     /// - `changes = Some(list)` → process only the given file changes.
+    /// - `force_rebuild = true` → clear and re-embed everything, ignoring staleness.
     /// - `progress` → optional handle for reporting live progress to the status map.
     pub async fn run(
         &self,
         changes: Option<Vec<FileChange>>,
+        force_rebuild: bool,
         vector_index: Option<&tokio::sync::RwLock<VectorIndex>>,
         progress: Option<ProgressHandle>,
     ) -> Result<IndexPipelineStats> {
@@ -53,12 +55,16 @@ impl IndexPipeline {
 
         let total_files = walk_repo(&self.repo).len() as u64;
 
-        if is_first_run {
-            info!(repo = %self.repo, "first run — full rebuild");
+        if is_first_run || force_rebuild {
+            if force_rebuild && !is_first_run {
+                info!(repo = %self.repo, "forced full rebuild");
+            } else {
+                info!(repo = %self.repo, "first run — full rebuild");
+            }
             let new_vectors = self.full_rebuild(&db, progress.as_ref()).await?;
             if let Some(vi) = vector_index {
                 let mut guard = vi.write().await;
-                guard.clear();
+                guard.remove_repo(&self.repo);
                 guard.insert(&new_vectors);
             }
             let indexed = get_all_file_meta(&db, &self.repo).await?.len() as u64;

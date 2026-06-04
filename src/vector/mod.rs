@@ -3,6 +3,8 @@ use surrealdb::Surreal;
 use surrealdb::engine::local::Db;
 use tracing::info;
 
+use crate::path_in_repo;
+
 // ─── Public types ─────────────────────────────────────────────────────────
 
 /// Identifies a chunk by its location in the source tree.
@@ -98,6 +100,51 @@ impl VectorIndex {
                 i += 1;
             }
         }
+    }
+
+    /// Remove all embeddings belonging to a repo.
+    ///
+    /// Uses [`path_in_repo`] for boundary-safe matching (no `/foo` vs `/foobar`
+    /// collision). O(n) swap-remove pass over the parallel arrays — same pattern
+    /// as [`remove_file`].
+    pub fn remove_repo(&mut self, repo: &str) {
+        let mut i = 0;
+        while i < self.chunk_ids.len() {
+            if path_in_repo(&self.chunk_ids[i].file, repo) {
+                self.chunk_ids.swap_remove(i);
+                self.embeddings.swap_remove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    /// Merge another `VectorIndex` into this one, consuming it.
+    ///
+    /// O(m) where m = other.len(). Vectors from `other` are already normalized
+    /// (they went through `insert` or `load_from_db`), so no re-normalization
+    /// is needed — they are moved directly into the parallel arrays.
+    ///
+    /// Dimension compatibility: if `self` has no dimension yet, adopts `other`'s.
+    /// If both have a dimension and they differ, logs a warning and skips the merge.
+    pub fn merge(&mut self, other: VectorIndex) {
+        if other.is_empty() {
+            return;
+        }
+        match (self.dimension, other.dimension) {
+            (None, dim) => self.dimension = dim,
+            (Some(a), Some(b)) if a != b => {
+                tracing::warn!(
+                    self_dim = a,
+                    other_dim = b,
+                    "VectorIndex merge dimension mismatch — skipping"
+                );
+                return;
+            }
+            _ => {}
+        }
+        self.embeddings.extend(other.embeddings);
+        self.chunk_ids.extend(other.chunk_ids);
     }
 
     /// Search for the top-k most similar chunks to `query`.
@@ -220,4 +267,171 @@ fn l2_normalize(v: &[f32]) -> Vec<f32> {
         return v.to_vec();
     }
     v.iter().map(|x| x / mag).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper: create a ChunkId for a given file and line range.
+    fn chunk(file: &str, start: u32, end: u32) -> ChunkId {
+        ChunkId {
+            file: file.to_string(),
+            line_start: start,
+            line_end: end,
+        }
+    }
+
+    /// Helper: create a simple non-zero embedding of the given dimension.
+    fn emb(dim: usize, seed: f32) -> Vec<f32> {
+        (0..dim).map(|i| seed + i as f32 * 0.1).collect()
+    }
+
+    #[test]
+    fn remove_repo_no_prefix_collision() {
+        // Two repos where one path PREFIXES the other:
+        // /foo and /foobar — removing /foo must NOT evict /foobar entries.
+        let mut index = VectorIndex::new();
+
+        let foo_chunks: Vec<(ChunkId, Vec<f32>)> = vec![
+            (chunk("/foo/a.rs", 1, 10), emb(4, 1.0)),
+            (chunk("/foo/b.rs", 1, 5), emb(4, 2.0)),
+        ];
+        let foobar_chunks: Vec<(ChunkId, Vec<f32>)> = vec![
+            (chunk("/foobar/c.rs", 1, 20), emb(4, 3.0)),
+            (chunk("/foobar/d.rs", 5, 15), emb(4, 4.0)),
+        ];
+
+        index.insert(&foo_chunks);
+        index.insert(&foobar_chunks);
+        assert_eq!(index.len(), 4);
+
+        // Remove /foo — only /foo entries should be evicted.
+        index.remove_repo("/foo");
+        assert_eq!(index.len(), 2);
+
+        // Verify the remaining entries all belong to /foobar.
+        for cid in &index.chunk_ids {
+            assert!(
+                cid.file.starts_with("/foobar/"),
+                "unexpected file after remove_repo: {}",
+                cid.file
+            );
+        }
+    }
+
+    #[test]
+    fn remove_repo_windows_paths_no_collision() {
+        // Windows variant: D:\proj\foo vs D:\proj\foobar
+        let mut index = VectorIndex::new();
+
+        let foo_chunks: Vec<(ChunkId, Vec<f32>)> = vec![
+            (chunk(r"D:\proj\foo\x.rs", 1, 10), emb(4, 1.0)),
+        ];
+        let foobar_chunks: Vec<(ChunkId, Vec<f32>)> = vec![
+            (chunk(r"D:\proj\foobar\y.rs", 1, 10), emb(4, 2.0)),
+        ];
+
+        index.insert(&foo_chunks);
+        index.insert(&foobar_chunks);
+        assert_eq!(index.len(), 2);
+
+        index.remove_repo(r"D:\proj\foo");
+        assert_eq!(index.len(), 1);
+        assert_eq!(index.chunk_ids[0].file, r"D:\proj\foobar\y.rs");
+    }
+
+    #[test]
+    fn full_rebuild_one_repo_preserves_other() {
+        // Simulate: index has repo A + repo B vectors.
+        // Full rebuild of A: remove_repo(A) then insert(new A vectors).
+        // Assert B is untouched and A is refreshed.
+        let mut index = VectorIndex::new();
+
+        let repo_a_old: Vec<(ChunkId, Vec<f32>)> = vec![
+            (chunk("/repo_a/old1.rs", 1, 10), emb(4, 1.0)),
+            (chunk("/repo_a/old2.rs", 5, 20), emb(4, 2.0)),
+        ];
+        let repo_b: Vec<(ChunkId, Vec<f32>)> = vec![
+            (chunk("/repo_b/file1.rs", 1, 5), emb(4, 3.0)),
+            (chunk("/repo_b/file2.rs", 10, 30), emb(4, 4.0)),
+            (chunk("/repo_b/file3.rs", 1, 100), emb(4, 5.0)),
+        ];
+
+        index.insert(&repo_a_old);
+        index.insert(&repo_b);
+        assert_eq!(index.len(), 5);
+
+        // Simulate full rebuild of repo A.
+        index.remove_repo("/repo_a");
+        assert_eq!(index.len(), 3); // Only B remains.
+
+        let repo_a_new: Vec<(ChunkId, Vec<f32>)> = vec![
+            (chunk("/repo_a/new1.rs", 1, 15), emb(4, 6.0)),
+            (chunk("/repo_a/new2.rs", 1, 8), emb(4, 7.0)),
+            (chunk("/repo_a/new3.rs", 1, 50), emb(4, 8.0)),
+        ];
+        index.insert(&repo_a_new);
+        assert_eq!(index.len(), 6); // 3 B + 3 new A
+
+        // Verify B is untouched.
+        let b_files: Vec<&str> = index
+            .chunk_ids
+            .iter()
+            .filter(|c| path_in_repo(&c.file, "/repo_b"))
+            .map(|c| c.file.as_str())
+            .collect();
+        assert_eq!(b_files.len(), 3);
+        assert!(b_files.contains(&"/repo_b/file1.rs"));
+        assert!(b_files.contains(&"/repo_b/file2.rs"));
+        assert!(b_files.contains(&"/repo_b/file3.rs"));
+
+        // Verify A is refreshed.
+        let a_files: Vec<&str> = index
+            .chunk_ids
+            .iter()
+            .filter(|c| path_in_repo(&c.file, "/repo_a"))
+            .map(|c| c.file.as_str())
+            .collect();
+        assert_eq!(a_files.len(), 3);
+        assert!(a_files.contains(&"/repo_a/new1.rs"));
+        assert!(a_files.contains(&"/repo_a/new2.rs"));
+        assert!(a_files.contains(&"/repo_a/new3.rs"));
+    }
+
+    #[test]
+    fn merge_combines_two_indexes() {
+        let mut a = VectorIndex::new();
+        a.insert(&[(chunk("/a/f.rs", 1, 10), emb(4, 1.0))]);
+
+        let mut b = VectorIndex::new();
+        b.insert(&[(chunk("/b/g.rs", 1, 5), emb(4, 2.0))]);
+
+        a.merge(b);
+        assert_eq!(a.len(), 2);
+    }
+
+    #[test]
+    fn merge_dimension_mismatch_skips() {
+        let mut a = VectorIndex::new();
+        a.insert(&[(chunk("/a/f.rs", 1, 10), emb(4, 1.0))]);
+
+        let mut b = VectorIndex::new();
+        b.insert(&[(chunk("/b/g.rs", 1, 5), emb(8, 2.0))]);
+
+        a.merge(b);
+        // Merge skipped — a should still have only 1 entry.
+        assert_eq!(a.len(), 1);
+    }
+
+    #[test]
+    fn remove_repo_with_trailing_sep() {
+        let mut index = VectorIndex::new();
+        index.insert(&[(chunk("/repo/file.rs", 1, 10), emb(4, 1.0))]);
+        assert_eq!(index.len(), 1);
+
+        // Repo path with trailing slash — should still match.
+        index.remove_repo("/repo/");
+        assert_eq!(index.len(), 0);
+    }
 }

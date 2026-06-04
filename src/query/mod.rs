@@ -8,13 +8,15 @@ use std::collections::HashMap;
 use surrealdb::Surreal;
 use surrealdb::engine::local::Db;
 
-/// Find the DB handle whose repo key is a prefix of `file`, or the first DB as fallback.
+use crate::path_in_repo;
+
+/// Find the DB handle whose repo key owns `file`, or the first DB as fallback.
 pub(crate) fn find_db_for_file<'a>(
     db_map: &'a HashMap<String, Surreal<Db>>,
     file: &str,
 ) -> Option<&'a Surreal<Db>> {
     for (repo_path, db) in db_map {
-        if file.starts_with(repo_path.as_str()) {
+        if path_in_repo(file, repo_path) {
             return Some(db);
         }
     }

@@ -109,6 +109,41 @@ pub struct IndexEngine {
 pub struct IndexTrigger {
     pub repo: String,
     pub changes: Option<Vec<FileChange>>, // None = full incremental scan
+    /// Force a full rebuild (clear + re-embed everything) regardless of staleness.
+    pub rebuild: bool,
+}
+
+/// Load and merge the vector index from all configured repo DBs into one index.
+///
+/// Each repo is opened and loaded independently; a failure to open or load any
+/// single repo is logged and skipped so the remaining repos still load. This is
+/// the startup path that makes every indexed repo searchable (not just the first).
+pub(crate) async fn load_repos_vector_index(
+    home_dir: &std::path::Path,
+    repos: &[String],
+) -> VectorIndex {
+    let mut merged = VectorIndex::new();
+    for repo in repos {
+        match store::open_db(home_dir, repo).await {
+            Ok(db) => match VectorIndex::load_from_db(&db).await {
+                Ok(vi) => {
+                    let count = vi.len();
+                    if count > 0 {
+                        merged.merge(vi);
+                        info!(repo = %repo, count, "loaded repo vectors into VectorIndex");
+                    }
+                }
+                Err(e) => {
+                    warn!(repo = %repo, error = %e, "failed to load VectorIndex from DB; skipping repo");
+                }
+            },
+            Err(e) => {
+                warn!(repo = %repo, error = %e, "failed to open DB for VectorIndex load; skipping repo");
+            }
+        }
+    }
+    info!(total = merged.len(), "VectorIndex loaded from DB");
+    merged
 }
 
 impl IndexEngine {
@@ -116,27 +151,9 @@ impl IndexEngine {
     pub async fn start(home_dir: PathBuf, settings: &Settings) -> Arc<Self> {
         let (trigger_tx, trigger_rx) = tokio::sync::mpsc::channel::<IndexTrigger>(256);
 
-        // Load the vector index from the first available repo DB, or start empty.
-        let vector_index = if let Some(first_repo) = settings.repos.first() {
-            match store::open_db(&home_dir, first_repo).await {
-                Ok(db) => match VectorIndex::load_from_db(&db).await {
-                    Ok(vi) => {
-                        info!(count = vi.len(), "VectorIndex loaded from DB");
-                        Arc::new(RwLock::new(vi))
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "failed to load VectorIndex from DB; starting empty");
-                        Arc::new(RwLock::new(VectorIndex::new()))
-                    }
-                },
-                Err(e) => {
-                    warn!(error = %e, "failed to open DB for VectorIndex load; starting empty");
-                    Arc::new(RwLock::new(VectorIndex::new()))
-                }
-            }
-        } else {
-            Arc::new(RwLock::new(VectorIndex::new()))
-        };
+        // Load the vector index from ALL configured repo DBs, merging into one index.
+        let vector_index =
+            Arc::new(RwLock::new(load_repos_vector_index(&home_dir, &settings.repos).await));
 
         let engine = Arc::new(IndexEngine {
             home_dir: home_dir.clone(),
@@ -179,6 +196,20 @@ impl IndexEngine {
             .send(IndexTrigger {
                 repo: repo.to_string(),
                 changes: None,
+                rebuild: false,
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("trigger channel closed: {e}"))?;
+        Ok(())
+    }
+
+    /// Send a manual trigger to fully rebuild a single repo's index.
+    pub async fn trigger_rebuild(&self, repo: &str) -> Result<()> {
+        self.trigger_tx
+            .send(IndexTrigger {
+                repo: repo.to_string(),
+                changes: None,
+                rebuild: true,
             })
             .await
             .map_err(|e| anyhow::anyhow!("trigger channel closed: {e}"))?;
@@ -234,6 +265,7 @@ async fn run_consumer(
 ) {
     while let Some(trigger) = rx.recv().await {
         let repo = trigger.repo.clone();
+        let force_rebuild = trigger.rebuild;
         let engine_ref = engine.clone();
         let settings_ref = settings.clone();
 
@@ -285,7 +317,7 @@ async fn run_consumer(
             voyage_client,
         );
 
-        match pipeline.run(trigger.changes, Some(&engine_ref.vector_index), Some(progress)).await {
+        match pipeline.run(trigger.changes, force_rebuild, Some(&engine_ref.vector_index), Some(progress)).await {
             Ok(stats) => {
                 info!(repo = %repo, indexed = stats.indexed_files, "indexing complete");
                 let mut statuses = engine_ref.statuses.write().await;
@@ -304,5 +336,41 @@ async fn run_consumer(
                 s.error = Some(e.to_string());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod load_repos_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// Seed `n` chunk rows (each with a non-empty 4-d embedding) into `repo`'s DB.
+    async fn seed_repo(home: &std::path::Path, repo: &str, n: usize) {
+        let db = store::open_db(home, repo).await.expect("open_db");
+        for i in 0..n {
+            let q = format!(
+                "CREATE chunk SET file = '{repo}/f{i}.rs', line_start = 1, line_end = 2, \
+                 content = 'x', embedding = [0.1, 0.2, 0.3, 0.4], symbol_ref = NONE;"
+            );
+            db.query(&q).await.expect("seed chunk");
+        }
+    }
+
+    /// Startup must load EVERY configured repo, not just the first.
+    /// Two repos seeded with 1 and 2 chunks → merged index must hold all 3.
+    /// Fails under the `.first()` / `take(1)` regression (would yield 1).
+    #[tokio::test]
+    async fn loads_all_repos_not_just_first() {
+        let home = TempDir::new().expect("tempdir");
+        let repo_one = "/proj/repo_one".to_string();
+        let repo_two = "/proj/repo_two".to_string();
+
+        seed_repo(home.path(), &repo_one, 1).await;
+        seed_repo(home.path(), &repo_two, 2).await;
+
+        let index = load_repos_vector_index(home.path(), &[repo_one, repo_two]).await;
+
+        // 1 (repo_one) + 2 (repo_two) = 3. Under take(1) this would be 1.
+        assert_eq!(index.len(), 3, "expected all repos merged, not just the first");
     }
 }

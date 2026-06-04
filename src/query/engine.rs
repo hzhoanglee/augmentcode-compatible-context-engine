@@ -10,6 +10,7 @@ use tracing::warn;
 
 use crate::embedding::voyage::VoyageClient;
 use crate::indexing::IndexEngine;
+use crate::path_in_repo;
 use crate::query::find_db_for_file;
 use crate::query::graph_expand::graph_expand;
 use crate::query::merger::{MergeChunk, merge_chunks};
@@ -98,7 +99,7 @@ pub async fn run_query(
     let filtered: Vec<_> = if let Some(repo) = repo_filter {
         raw_results
             .into_iter()
-            .filter(|r| r.chunk_id.file.starts_with(repo))
+            .filter(|r| path_in_repo(&r.chunk_id.file, repo))
             .collect()
     } else {
         raw_results
