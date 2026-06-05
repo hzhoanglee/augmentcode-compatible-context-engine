@@ -635,3 +635,115 @@ fn strip_symbol_ref(s: &str) -> Option<String> {
         .and_then(|s| s.strip_suffix("⟩"))
         .map(|fqn| fqn.rsplit("::").next().unwrap_or(fqn).to_string())
 }
+
+// ─── STEP 1 proof test ────────────────────────────────────────────────────
+//
+// Before the schema fix, `symbol_ref` and `parent` were declared as
+// `option<record<symbol>>` (SCHEMAFULL). Assigning a quoted string to those
+// fields caused SurrealDB to roll back the whole transaction silently —
+// `db.query(&txn).await` returned Ok but the row was not committed.
+//
+// After the fix (both fields changed to `option<string>`), quoted strings
+// commit correctly. These tests verify the fixed behaviour: the transaction
+// MUST persist the row, and `.check()` MUST return Ok (no per-statement error).
+#[cfg(test)]
+mod silent_rollback_proof {
+    use super::*;
+    use crate::store::open_db;
+    use tempfile::TempDir;
+
+    /// Open a fresh in-memory-equivalent SurrealKv DB in a tempdir with the
+    /// real schema applied, returning it ready for writes.
+    async fn open_test_db(home: &TempDir, repo: &str) -> Surreal<surrealdb::engine::local::Db> {
+        open_db(home.path(), repo).await.expect("open test db")
+    }
+
+    /// After the schema fix (`symbol_ref option<string>`), a quoted-string assignment
+    /// MUST commit. The transaction must persist the chunk and `.check()` must be Ok.
+    #[tokio::test]
+    async fn string_assigned_to_symbol_ref_commits_after_schema_fix() {
+        let home = TempDir::new().unwrap();
+        let db = open_test_db(&home, "/test/proof_repo").await;
+
+        // Mimics exactly what pipeline.rs writes for a chunk with a symbol_ref.
+        let txn = "\
+BEGIN TRANSACTION;\n\
+CREATE chunk SET \
+  file = '/test/foo.rs', \
+  line_start = 1, \
+  line_end = 5, \
+  content = 'fn foo() {}', \
+  embedding = [], \
+  symbol_ref = 'symbol:⟨foo::bar⟩';\n\
+COMMIT TRANSACTION;\n";
+
+        // .await must not err.
+        let resp = db.query(txn).await.expect(".await must not err after schema fix");
+
+        // .check() must be Ok — no per-statement error (string is valid for option<string>).
+        resp.check().expect(".check() must be Ok after schema fix: schema now accepts string");
+
+        let chunk_count = count_chunks(&db).await.unwrap();
+        println!("FIXED — chunk count with quoted symbol_ref: {chunk_count}");
+        assert_eq!(
+            chunk_count,
+            1,
+            "chunk must persist after schema fix (got {chunk_count})"
+        );
+    }
+
+    /// Control test: a chunk with symbol_ref = NONE must still commit.
+    #[tokio::test]
+    async fn chunk_with_none_symbol_ref_commits_ok() {
+        let home = TempDir::new().unwrap();
+        let db = open_test_db(&home, "/test/control_repo").await;
+
+        let txn = "\
+BEGIN TRANSACTION;\n\
+CREATE chunk SET \
+  file = '/test/foo.rs', \
+  line_start = 1, \
+  line_end = 5, \
+  content = 'fn foo() {}', \
+  embedding = [], \
+  symbol_ref = NONE;\n\
+COMMIT TRANSACTION;\n";
+
+        db.query(txn).await.expect("txn must not err");
+        let count = count_chunks(&db).await.unwrap();
+        println!("NONE symbol_ref — chunk count: {count}");
+        assert_eq!(count, 1, "chunk with NONE symbol_ref must persist (got {count})");
+    }
+
+    /// After the schema fix (`parent option<string>`), a quoted-string assignment
+    /// to `parent` MUST commit.
+    #[tokio::test]
+    async fn string_assigned_to_parent_field_commits_after_schema_fix() {
+        let home = TempDir::new().unwrap();
+        let db = open_test_db(&home, "/test/parent_proof_repo").await;
+
+        // Mirrors what append_upsert_symbol writes when parent_fqn is Some.
+        let txn = "\
+BEGIN TRANSACTION;\n\
+UPSERT symbol:`⟨/test/foo.rs::/test/foo.rs::bar⟩` SET \
+  name = 'bar', \
+  kind = 'function', \
+  file = '/test/foo.rs', \
+  line_start = 1, \
+  line_end = 5, \
+  signature = NONE, \
+  parent = 'symbol:⟨/test/foo.rs::/test/foo.rs::outer⟩';\n\
+COMMIT TRANSACTION;\n";
+
+        let resp = db.query(txn).await.expect(".await must not err after schema fix");
+        resp.check().expect(".check() must be Ok: parent is now option<string>");
+
+        let count = count_symbols(&db).await.unwrap();
+        println!("FIXED — symbol count with quoted parent: {count}");
+        assert_eq!(
+            count,
+            1,
+            "symbol must persist after schema fix (got {count})"
+        );
+    }
+}

@@ -111,23 +111,16 @@ fn decode_repo_id(repo_id: &str) -> Result<String, Response> {
         })
 }
 
-/// Acquire a SurrealDB handle for `repo`, reusing the cached one or opening it
-/// lazily (and caching it). Handles are `Arc`-backed so the clone is cheap and
-/// the read lock is never held across an `await` on the DB.
+/// Acquire the shared SurrealDB handle for `repo`. Delegates to
+/// [`store::get_or_open`] so the server reads through the *same* datastore
+/// instance the indexer writes through (see [`store::RepoDbMap`]).
 async fn acquire_repo_db(state: &AppState, repo: &str) -> Result<Surreal<Db>, Response> {
-    if let Some(db) = state.repo_dbs.read().await.get(repo) {
-        return Ok(db.clone());
-    }
-    match store::open_db(&state.home_dir, repo).await {
-        Ok(db) => {
-            state.repo_dbs.write().await.insert(repo.to_string(), db.clone());
-            Ok(db)
-        }
-        Err(e) => {
+    store::get_or_open(&state.repo_dbs, &state.home_dir, repo)
+        .await
+        .map_err(|e| {
             let body = json!({ "error": format!("failed to open index DB: {e}") });
-            Err((StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response())
-        }
-    }
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(body)).into_response()
+        })
 }
 
 /// Map a `store::ops` error to a 500 JSON response.

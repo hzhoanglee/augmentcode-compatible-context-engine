@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use surrealdb::Surreal;
@@ -14,7 +13,6 @@ use crate::indexing::walker::walk_repo;
 use crate::parsing::parse_file;
 use crate::parsing::relations::{EdgeKind, EdgeTarget, RawEdge};
 use crate::parsing::symbols::{QualifiedSymbol, Symbol};
-use crate::store;
 use crate::store::ops::get_all_file_meta;
 use crate::vector::{ChunkId, VectorIndex};
 
@@ -25,32 +23,30 @@ pub struct IndexPipelineStats {
 
 /// Runs the parse → embed → store pipeline for one repo.
 pub struct IndexPipeline {
-    home_dir: PathBuf,
     repo: String,
     voyage: Option<VoyageClient>,
 }
 
 impl IndexPipeline {
-    pub fn new(home_dir: PathBuf, repo: String, voyage: Option<VoyageClient>) -> Self {
-        Self { home_dir, repo, voyage }
+    pub fn new(repo: String, voyage: Option<VoyageClient>) -> Self {
+        Self { repo, voyage }
     }
 
-    /// Run the pipeline.
+    /// Run the pipeline against the shared `db` handle.
     /// - `changes = None` → incremental scan (detect changes from mtime).
     /// - `changes = Some(list)` → process only the given file changes.
     /// - `force_rebuild = true` → clear and re-embed everything, ignoring staleness.
     /// - `progress` → optional handle for reporting live progress to the status map.
     pub async fn run(
         &self,
+        db: &Surreal<Db>,
         changes: Option<Vec<FileChange>>,
         force_rebuild: bool,
         vector_index: Option<&tokio::sync::RwLock<VectorIndex>>,
         progress: Option<ProgressHandle>,
     ) -> Result<IndexPipelineStats> {
-        let db = store::open_db(&self.home_dir, &self.repo).await?;
-
         // Check if first run (no file_meta at all).
-        let stored_meta = get_all_file_meta(&db, &self.repo).await?;
+        let stored_meta = get_all_file_meta(db, &self.repo).await?;
         let is_first_run = stored_meta.is_empty();
 
         let total_files = walk_repo(&self.repo).len() as u64;
@@ -61,13 +57,13 @@ impl IndexPipeline {
             } else {
                 info!(repo = %self.repo, "first run — full rebuild");
             }
-            let new_vectors = self.full_rebuild(&db, progress.as_ref()).await?;
+            let new_vectors = self.full_rebuild(db, progress.as_ref()).await?;
             if let Some(vi) = vector_index {
                 let mut guard = vi.write().await;
                 guard.remove_repo(&self.repo);
                 guard.insert(&new_vectors);
             }
-            let indexed = get_all_file_meta(&db, &self.repo).await?.len() as u64;
+            let indexed = get_all_file_meta(db, &self.repo).await?.len() as u64;
             return Ok(IndexPipelineStats { indexed_files: indexed, total_files });
         }
 
@@ -92,7 +88,7 @@ impl IndexPipeline {
         }
 
         info!(repo = %self.repo, changes = file_changes.len(), "incremental index");
-        let (removed_files, new_vectors) = self.incremental_run(&db, file_changes, progress.as_ref()).await?;
+        let (removed_files, new_vectors) = self.incremental_run(db, file_changes, progress.as_ref()).await?;
 
         if let Some(vi) = vector_index {
             let mut guard = vi.write().await;
@@ -102,7 +98,7 @@ impl IndexPipeline {
             guard.insert(&new_vectors);
         }
 
-        let indexed = get_all_file_meta(&db, &self.repo).await?.len() as u64;
+        let indexed = get_all_file_meta(db, &self.repo).await?.len() as u64;
         Ok(IndexPipelineStats { indexed_files: indexed, total_files })
     }
 
@@ -192,7 +188,8 @@ impl IndexPipeline {
 
         txn.push_str("COMMIT TRANSACTION;\n");
 
-        db.query(&txn).await.context("full_rebuild: transaction failed")?;
+        let resp = db.query(&txn).await.context("full_rebuild: transaction failed")?;
+        check_transaction(resp).context("full_rebuild")?;
 
         Ok(chunk_vectors)
     }
@@ -309,7 +306,8 @@ impl IndexPipeline {
 
         txn.push_str("COMMIT TRANSACTION;\n");
 
-        db.query(&txn).await.context("incremental_run: transaction failed")?;
+        let resp = db.query(&txn).await.context("incremental_run: transaction failed")?;
+        check_transaction(resp).context("incremental_run")?;
 
         Ok((all_affected, chunk_vectors))
     }
@@ -494,6 +492,39 @@ fn resolve_edges(
 
 // ─── SurrealQL escaping ───────────────────────────────────────────────────
 
+/// Inspect a transaction response and return the FIRST meaningful per-statement
+/// error, or `Ok(())` if every statement succeeded.
+///
+/// `Response::check()` is not usable here: when a SurrealDB transaction rolls
+/// back, EVERY statement is annotated with the same generic "The query was not
+/// executed due to a failed transaction" message, and `check()` surfaces only
+/// the first of those — hiding the one statement whose real error (e.g. a type
+/// violation) actually triggered the rollback. `take_errors()` returns the full
+/// `index → error` map, so we skip the generic cascade messages and report the
+/// true culprit with its statement index.
+fn check_transaction(mut resp: surrealdb::Response) -> Result<()> {
+    let errors = resp.take_errors();
+    if errors.is_empty() {
+        return Ok(());
+    }
+    const GENERIC: &str = "The query was not executed due to a failed transaction";
+    // Prefer the first error that is NOT the generic rollback-cascade message.
+    let culprit = errors
+        .iter()
+        .filter(|(_, e)| !e.to_string().contains(GENERIC))
+        .min_by_key(|(idx, _)| **idx);
+    match culprit {
+        Some((idx, e)) => {
+            anyhow::bail!("transaction rolled back — statement #{idx} failed: {e}")
+        }
+        None => {
+            // Only generic cascade messages present (rare): report the lowest index.
+            let (idx, e) = errors.iter().min_by_key(|(idx, _)| **idx).unwrap();
+            anyhow::bail!("transaction rolled back — statement #{idx}: {e}")
+        }
+    }
+}
+
 /// Escape a string for safe embedding in a SurrealQL single-quoted literal.
 /// Handles backslashes (must be first) and single quotes.
 fn escape_surreal(s: &str) -> String {
@@ -505,7 +536,7 @@ fn format_embedding(emb: &[f32]) -> String {
     if emb.is_empty() {
         return "[]".to_string();
     }
-    let inner: Vec<String> = emb.iter().map(|v| format!("{v}")).collect();
+    let inner: Vec<String> = emb.iter().map(|v| format!("{v:?}")).collect();
     format!("[{}]", inner.join(","))
 }
 
@@ -613,4 +644,266 @@ fn append_upsert_file_meta(txn: &mut String, path: &str, mtime: i64, size: i64, 
         "UPSERT file_meta SET path = '{p}', mtime = {mtime}, size = {size}, repo = '{r}' \
          WHERE path = '{p}';\n"
     ));
+}
+
+// ─── format_embedding correctness tests ──────────────────────────────────────
+//
+// Regression suite for the format_embedding fix.
+// Root cause investigation showed that `format!("{v}")` for f32 emits bare integer
+// tokens ("0", "1", "-0") for whole-number floats. SurrealDB's SCHEMAFULL
+// `array<float>` field accepts those via coercion today but the correct fix is to
+// always emit a float-form literal so the stored type is unambiguous.
+// The fix uses `{v:?}` (Rust Debug format for f32) which always includes either a
+// decimal point (`0.0`, `1.0`) or scientific-notation exponent (`1e-7`) — making
+// every element parseable as a SurrealQL float literal without coercion.
+#[cfg(test)]
+mod format_embedding_tests {
+    use super::*;
+    use crate::store::open_db;
+    use crate::store::ops::count_chunks;
+    use tempfile::TempDir;
+
+    /// After the fix, format_embedding must never emit bare integer tokens.
+    /// A bare integer token is a value with neither '.' nor 'e'/'E'.
+    #[test]
+    fn format_embedding_always_emits_float_literals() {
+        let cases: &[&[f32]] = &[
+            &[0.0, 1.0, -1.0, 0.5],
+            &[-0.0, 2.0, -2.0, 100.0],
+            &[0.023445, -0.987654, 0.5],
+            &[1.0e-7, -1.0e7, f32::MIN_POSITIVE],
+        ];
+        for input in cases {
+            let result = format_embedding(input);
+            println!("format_embedding({input:?}) = {result}");
+            // Each comma-separated element must contain '.' or 'e'/'E'.
+            let inner = result.trim_start_matches('[').trim_end_matches(']');
+            for token in inner.split(',') {
+                let t = token.trim();
+                assert!(
+                    t.contains('.') || t.contains('e') || t.contains('E'),
+                    "token {t:?} in {result:?} is not a float literal \
+                     (no '.' or 'e'); would be parsed as integer in SurrealQL"
+                );
+            }
+        }
+    }
+
+    /// format_embedding with whole-number floats must produce `0.0`, `1.0` etc.
+    /// (specifically checking the Debug format gives correct output).
+    #[test]
+    fn whole_number_floats_get_decimal_point() {
+        let result = format_embedding(&[0.0, 1.0, -1.0, -0.0]);
+        println!("whole-number floats: {result}");
+        assert!(result.contains("0.0"), "0.0 must appear as '0.0', got: {result}");
+        assert!(result.contains("1.0"), "1.0 must appear as '1.0', got: {result}");
+        assert!(result.contains("-1.0"), "-1.0 must appear as '-1.0', got: {result}");
+    }
+
+    /// Chunks with whole-number embedding components (0.0, 1.0) must commit and
+    /// persist when the embedding is generated via format_embedding.
+    /// This is the key regression test: before the fix, the formatted embedding
+    /// would produce integer tokens that could cause issues; after the fix,
+    /// the chunk persists correctly with proper float literals.
+    #[tokio::test]
+    async fn chunk_with_whole_number_embedding_persists() {
+        let home = TempDir::new().unwrap();
+        let db = open_db(home.path(), "/test/embed_regression").await.expect("open db");
+
+        // Use format_embedding with whole-number components — the same path as production.
+        let embedding_str = format_embedding(&[0.0, 1.0, -1.0, 0.5, -0.5]);
+        println!("REGRESSION: embedding literal = {embedding_str}");
+
+        let txn = format!(
+            "BEGIN TRANSACTION;\n\
+             CREATE chunk SET file = '/test/foo.rs', line_start = 1, line_end = 5, \
+             content = 'fn foo() {{}}', embedding = {embedding_str}, symbol_ref = NONE;\n\
+             COMMIT TRANSACTION;\n"
+        );
+
+        db.query(&txn).await.expect(".await must not err")
+            .check().expect("chunk with formatted embedding must commit without per-statement error");
+
+        let count = count_chunks(&db).await.unwrap();
+        assert_eq!(count, 1,
+            "chunk must persist after format_embedding fix (got {count}); \
+             integer token in embedding may have triggered a rollback");
+    }
+
+    /// format_embedding round-trips float precision: values stored and retrieved
+    /// should be numerically equivalent to the original f32 (within f32 precision).
+    #[tokio::test]
+    async fn format_embedding_round_trips_precision() {
+        use serde::Deserialize;
+
+        let home = TempDir::new().unwrap();
+        let db = open_db(home.path(), "/test/embed_roundtrip").await.expect("open db");
+
+        let original: Vec<f32> = vec![0.023445, -0.987654, 0.5, 0.0, 1.0, -1.0, 1.234567e-7];
+        let embedding_str = format_embedding(&original);
+        println!("ROUNDTRIP: embedding_str = {embedding_str}");
+
+        let txn = format!(
+            "BEGIN TRANSACTION;\n\
+             CREATE chunk SET file = '/test/rt.rs', line_start = 1, line_end = 1, \
+             content = 'x', embedding = {embedding_str}, symbol_ref = NONE;\n\
+             COMMIT TRANSACTION;\n"
+        );
+        db.query(&txn).await.expect(".await").check().expect(".check");
+
+        #[derive(Deserialize)]
+        struct Row { embedding: Vec<f64> }
+        let rows: Vec<Row> = db
+            .query("SELECT embedding FROM chunk LIMIT 1")
+            .await.expect("select").take(0).expect("take");
+
+        let stored = &rows.first().expect("must have a row").embedding;
+        assert_eq!(stored.len(), original.len(), "embedding length must round-trip");
+        for (i, (&orig, &stored_v)) in original.iter().zip(stored.iter()).enumerate() {
+            let diff = (orig as f64 - stored_v).abs();
+            assert!(
+                diff < 1e-6,
+                "element {i}: original={orig}, stored={stored_v}, diff={diff}; \
+                 float precision must survive format_embedding round-trip"
+            );
+        }
+        println!("ROUNDTRIP: all {} elements match within 1e-6", original.len());
+    }
+}
+
+// ─── STEP 3 regression test ───────────────────────────────────────────────
+//
+// Drives the real full_rebuild write path end-to-end (voyage = None so no
+// network) and asserts that chunks, files, and symbols all persist.
+// Also includes a voyage-scale probe for 1024-dim embeddings.
+#[cfg(test)]
+mod end_to_end_persist {
+    use super::*;
+    use crate::store::open_db;
+    use crate::store::ops::{count_chunks, count_indexed_files, count_symbols};
+    use tempfile::TempDir;
+
+    /// Write a tiny Rust source file into `dir` and return its absolute path.
+    fn write_test_file(dir: &std::path::Path) -> String {
+        let path = dir.join("sample.rs");
+        std::fs::write(
+            &path,
+            "fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n\nfn subtract(a: i32, b: i32) -> i32 {\n    a - b\n}\n",
+        )
+        .expect("write test file");
+        path.to_str().unwrap().replace('\\', "/")
+    }
+
+    /// Full-rebuild of the real context-engine-rs source tree (voyage=None).
+    /// This exercises the SAME code path and file set as the live failing run.
+    #[tokio::test]
+    async fn full_rebuild_real_source_tree_voyage_none() {
+        let home = TempDir::new().unwrap();
+        let repo = env!("CARGO_MANIFEST_DIR").replace('\\', "/");
+        println!("REAL-TREE PROBE: repo = {repo}");
+
+        let db = open_db(home.path(), &repo).await.expect("open db");
+        let pipeline = IndexPipeline::new(repo.clone(), None);
+
+        let result = pipeline.run(&db, None, true, None, None).await;
+        println!("REAL-TREE PROBE: result = {:?}", result.as_ref().map(|s| (s.indexed_files, s.total_files)));
+
+        let chunks = count_chunks(&db).await.unwrap();
+        let symbols = count_symbols(&db).await.unwrap();
+        let files = count_indexed_files(&db, &repo).await.unwrap();
+        println!("REAL-TREE PROBE: chunks={chunks}, symbols={symbols}, files={files}");
+
+        assert!(result.is_ok(), "full_rebuild of real source tree must succeed (got: {:?})", result.err());
+        assert!(chunks > 0, "must have chunks after full_rebuild of real source tree");
+        assert!(files > 0, "must have indexed files");
+    }
+
+    /// VOYAGE-SCALE probe — simulate a full transaction with 1024-dim embeddings
+    /// using format_embedding, to reproduce the production rollback condition.
+    #[tokio::test]
+    async fn voyage_scale_embedding_transaction_probe() {
+        let home = TempDir::new().unwrap();
+        let db = open_db(home.path(), "/test/voyage_scale").await.expect("open db");
+
+        // Simulate Voyage AI embeddings: normalized vectors, values in (-1, 1).
+        // Use a deterministic pattern that includes whole-number components (0.0, 1.0, -1.0)
+        // alongside fractional values, matching what Voyage would actually return.
+        let make_emb = |seed: usize| -> Vec<f32> {
+            (0..1024usize).map(|i| {
+                let v = ((seed * 7 + i * 13) % 2001) as f32 / 1000.0 - 1.0;
+                v.max(-1.0_f32).min(1.0_f32)
+            }).collect()
+        };
+
+        let mut txn = String::from("BEGIN TRANSACTION;\n");
+
+        txn.push_str("UPSERT symbol:`⟨/test/s.rs::/test/s.rs::test_fn⟩` SET \
+            name = 'test_fn', kind = 'function', file = '/test/s.rs', \
+            line_start = 1, line_end = 10, signature = NONE, parent = NONE;\n");
+
+        for i in 0..50usize {
+            let emb = make_emb(i);
+            let emb_str = format_embedding(&emb);
+            txn.push_str(&format!(
+                "CREATE chunk SET file = '/test/s.rs', line_start = {ls}, line_end = {le}, \
+                 content = 'fn chunk_{i}() {{}}', embedding = {emb_str}, \
+                 symbol_ref = 'symbol:⟨/test/s.rs::/test/s.rs::test_fn⟩';\n",
+                ls = i * 10, le = i * 10 + 9
+            ));
+        }
+
+        txn.push_str("UPSERT file_meta SET path = '/test/s.rs', mtime = 12345, size = 1000, \
+            repo = '/test' WHERE path = '/test/s.rs';\n");
+        txn.push_str("COMMIT TRANSACTION;\n");
+
+        println!("VOYAGE-SCALE PROBE: txn length = {} bytes", txn.len());
+
+        let mut resp = db.query(&txn).await.expect(".await must not err");
+        let errors: Vec<_> = resp.take_errors().into_iter().collect();
+        println!("VOYAGE-SCALE PROBE: per-statement errors = {:?}", errors);
+
+        let chunk_count = count_chunks(&db).await.unwrap();
+        let symbol_count = count_symbols(&db).await.unwrap();
+        println!("VOYAGE-SCALE PROBE: chunk_count={chunk_count}, symbol_count={symbol_count}");
+        println!("VOYAGE-SCALE PROBE: RESULT — 1024-dim embedding transaction {}",
+            if errors.is_empty() && chunk_count == 50 { "COMMITS OK" }
+            else if errors.is_empty() { "NO ERROR BUT WRONG COUNTS" }
+            else { "FAILS" });
+    }
+
+    /// Full-rebuild through the real IndexPipeline (voyage=None) must persist
+    /// chunks, indexed files, and symbols — proving the transaction no longer
+    /// rolls back silently.
+    #[tokio::test]
+    async fn full_rebuild_persists_chunks_files_symbols() {
+        let home = TempDir::new().unwrap();
+        let repo_dir = TempDir::new().unwrap();
+
+        let _file_path = write_test_file(repo_dir.path());
+        let repo = repo_dir.path().to_str().unwrap().replace('\\', "/");
+
+        let db = open_db(home.path(), &repo).await.expect("open db");
+        let pipeline = IndexPipeline::new(repo.clone(), None);
+
+        let stats = pipeline
+            .run(&db, None, true, None, None)
+            .await
+            .expect("full_rebuild must succeed");
+
+        let chunks = count_chunks(&db).await.unwrap();
+        let files = count_indexed_files(&db, &repo).await.unwrap();
+        let symbols = count_symbols(&db).await.unwrap();
+
+        println!("STEP3 — indexed_files={}, total_files={}", stats.indexed_files, stats.total_files);
+        println!("STEP3 — chunks={chunks}, files={files}, symbols={symbols}");
+
+        assert!(chunks > 0,
+            "chunks must be > 0 after full_rebuild (got {chunks}); transaction still rolling back");
+        assert!(files > 0,
+            "indexed files must be > 0 after full_rebuild (got {files})");
+        assert!(symbols > 0,
+            "symbols must be > 0 after full_rebuild (got {symbols})");
+        assert_eq!(stats.indexed_files, files,
+            "stats.indexed_files must match count_indexed_files");
+    }
 }

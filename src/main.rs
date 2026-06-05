@@ -76,7 +76,8 @@ async fn main() {
     let repo_dbs = Arc::new(RwLock::new(repo_db_map));
 
     // Start IndexEngine — spawns watchers for all configured repos.
-    let index_engine = IndexEngine::start(home_dir.clone(), &settings).await;
+    // It shares `repo_dbs` so indexer writes land in the handles the server reads.
+    let index_engine = IndexEngine::start(home_dir.clone(), &settings, repo_dbs.clone()).await;
     info!("IndexEngine started ({} repos)", settings.repos.len());
 
     let addr: std::net::SocketAddr = format!("{bind}:{port}")

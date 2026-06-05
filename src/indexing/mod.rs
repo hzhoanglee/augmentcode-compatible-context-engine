@@ -18,7 +18,7 @@ use crate::embedding::voyage::VoyageClient;
 use crate::indexing::pipeline::IndexPipeline;
 use crate::indexing::tracker::FileChange;
 use crate::indexing::watcher::start_watcher;
-use crate::store;
+use crate::store::{self, RepoDbMap};
 use crate::vector::{SearchResult, VectorIndex};
 
 // ─── Repo indexing status ─────────────────────────────────────────────────
@@ -103,6 +103,9 @@ pub struct IndexEngine {
     trigger_tx: tokio::sync::mpsc::Sender<IndexTrigger>,
     /// In-process vector index for fast cosine similarity search.
     pub vector_index: Arc<RwLock<VectorIndex>>,
+    /// Shared per-repo DB handles — the same map the server reads through, so
+    /// indexer writes are visible to explorer/query reads (one instance per repo).
+    repo_dbs: RepoDbMap,
 }
 
 #[derive(Debug)]
@@ -119,12 +122,13 @@ pub struct IndexTrigger {
 /// single repo is logged and skipped so the remaining repos still load. This is
 /// the startup path that makes every indexed repo searchable (not just the first).
 pub(crate) async fn load_repos_vector_index(
+    repo_dbs: &RepoDbMap,
     home_dir: &std::path::Path,
     repos: &[String],
 ) -> VectorIndex {
     let mut merged = VectorIndex::new();
     for repo in repos {
-        match store::open_db(home_dir, repo).await {
+        match store::get_or_open(repo_dbs, home_dir, repo).await {
             Ok(db) => match VectorIndex::load_from_db(&db).await {
                 Ok(vi) => {
                     let count = vi.len();
@@ -148,12 +152,16 @@ pub(crate) async fn load_repos_vector_index(
 
 impl IndexEngine {
     /// Create the engine and spawn the watcher background task.
-    pub async fn start(home_dir: PathBuf, settings: &Settings) -> Arc<Self> {
+    ///
+    /// `repo_dbs` is the shared handle map (also held by the server); the
+    /// indexer writes through these same handles so reads observe its commits.
+    pub async fn start(home_dir: PathBuf, settings: &Settings, repo_dbs: RepoDbMap) -> Arc<Self> {
         let (trigger_tx, trigger_rx) = tokio::sync::mpsc::channel::<IndexTrigger>(256);
 
         // Load the vector index from ALL configured repo DBs, merging into one index.
-        let vector_index =
-            Arc::new(RwLock::new(load_repos_vector_index(&home_dir, &settings.repos).await));
+        let vector_index = Arc::new(RwLock::new(
+            load_repos_vector_index(&repo_dbs, &home_dir, &settings.repos).await,
+        ));
 
         let engine = Arc::new(IndexEngine {
             home_dir: home_dir.clone(),
@@ -161,6 +169,7 @@ impl IndexEngine {
             repo_locks: Mutex::new(HashMap::new()),
             trigger_tx: trigger_tx.clone(),
             vector_index,
+            repo_dbs,
         });
 
         // Initialise status entries.
@@ -311,13 +320,26 @@ async fn run_consumer(
             repo: repo.clone(),
         };
 
-        let pipeline = IndexPipeline::new(
-            engine_ref.home_dir.clone(),
-            repo.clone(),
-            voyage_client,
-        );
+        // Acquire the SHARED repo DB handle — the same instance the server reads
+        // through, so the explorer/query layer sees these writes immediately.
+        let db = match store::get_or_open(&engine_ref.repo_dbs, &engine_ref.home_dir, &repo).await {
+            Ok(db) => db,
+            Err(e) => {
+                error!(repo = %repo, error = %e, "failed to open repo DB");
+                let mut statuses = engine_ref.statuses.write().await;
+                let s = statuses.entry(repo.clone()).or_default();
+                s.state = IndexState::Error;
+                s.error = Some(e.to_string());
+                continue;
+            }
+        };
 
-        match pipeline.run(trigger.changes, force_rebuild, Some(&engine_ref.vector_index), Some(progress)).await {
+        let pipeline = IndexPipeline::new(repo.clone(), voyage_client);
+
+        match pipeline
+            .run(&db, trigger.changes, force_rebuild, Some(&engine_ref.vector_index), Some(progress))
+            .await
+        {
             Ok(stats) => {
                 info!(repo = %repo, indexed = stats.indexed_files, "indexing complete");
                 let mut statuses = engine_ref.statuses.write().await;
@@ -329,11 +351,14 @@ async fn run_consumer(
                 s.error = None;
             }
             Err(e) => {
-                error!(repo = %repo, error = %e, "indexing failed");
+                // `{e:#}` prints the full anyhow context chain on one line
+                // (outer context + the underlying SurrealDB per-statement error),
+                // not just the outermost message — essential for diagnosing rollbacks.
+                error!(repo = %repo, error = %format!("{e:#}"), "indexing failed");
                 let mut statuses = engine_ref.statuses.write().await;
                 let s = statuses.entry(repo.clone()).or_default();
                 s.state = IndexState::Error;
-                s.error = Some(e.to_string());
+                s.error = Some(format!("{e:#}"));
             }
         }
     }
@@ -368,7 +393,9 @@ mod load_repos_tests {
         seed_repo(home.path(), &repo_one, 1).await;
         seed_repo(home.path(), &repo_two, 2).await;
 
-        let index = load_repos_vector_index(home.path(), &[repo_one, repo_two]).await;
+        let repo_dbs: RepoDbMap = Arc::new(RwLock::new(HashMap::new()));
+        let index =
+            load_repos_vector_index(&repo_dbs, home.path(), &[repo_one, repo_two]).await;
 
         // 1 (repo_one) + 2 (repo_two) = 3. Under take(1) this would be 1.
         assert_eq!(index.len(), 3, "expected all repos merged, not just the first");
