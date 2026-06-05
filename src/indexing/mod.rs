@@ -1,3 +1,4 @@
+pub mod events;
 pub mod pipeline;
 pub mod tracker;
 pub mod walker;
@@ -6,6 +7,7 @@ pub mod watcher;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -15,6 +17,7 @@ use tracing::{error, info, warn};
 
 use crate::config::Settings;
 use crate::embedding::voyage::VoyageClient;
+use crate::indexing::events::{IndexEvent, IndexEventBus};
 use crate::indexing::pipeline::IndexPipeline;
 use crate::indexing::tracker::FileChange;
 use crate::indexing::watcher::start_watcher;
@@ -106,6 +109,8 @@ pub struct IndexEngine {
     /// Shared per-repo DB handles — the same map the server reads through, so
     /// indexer writes are visible to explorer/query reads (one instance per repo).
     repo_dbs: RepoDbMap,
+    /// Broadcast channel for streaming indexing events to SSE clients.
+    pub event_bus: IndexEventBus,
 }
 
 #[derive(Debug)]
@@ -185,6 +190,7 @@ impl IndexEngine {
             trigger_tx: trigger_tx.clone(),
             vector_index,
             repo_dbs,
+            event_bus: IndexEventBus::new(),
         });
 
         // Initialise status entries.
@@ -341,6 +347,7 @@ async fn run_consumer(
         let repo = trigger.repo.clone();
         let force_rebuild = trigger.rebuild;
         let engine_ref = engine.clone();
+        let run_start = Instant::now();
 
         // Acquire per-repo serialisation lock.
         let lock = engine_ref.get_repo_lock(&repo).await;
@@ -373,6 +380,10 @@ async fn run_consumer(
                     let s = statuses.entry(repo.clone()).or_default();
                     s.state = IndexState::Error;
                     s.error = Some(e.to_string());
+                    engine_ref.event_bus.emit(IndexEvent::Failed {
+                        repo: repo.clone(),
+                        error: e.to_string(),
+                    });
                     continue;
                 }
             }
@@ -394,9 +405,27 @@ async fn run_consumer(
                 let s = statuses.entry(repo.clone()).or_default();
                 s.state = IndexState::Error;
                 s.error = Some(e.to_string());
+                engine_ref.event_bus.emit(IndexEvent::Failed {
+                    repo: repo.clone(),
+                    error: e.to_string(),
+                });
                 continue;
             }
         };
+
+        // Mask API keys for event display.
+        let key_hints: Vec<String> = settings_ref
+            .embedding
+            .api_keys
+            .iter()
+            .map(|k| {
+                if k.len() > 8 {
+                    format!("{}...{}", &k[..4], &k[k.len() - 4..])
+                } else {
+                    "****".to_string()
+                }
+            })
+            .collect();
 
         let pipeline = {
             // total in-flight batches = per-key concurrency × number of keys.
@@ -419,10 +448,19 @@ async fn run_consumer(
         };
 
         match pipeline
-            .run(&db, trigger.changes, force_rebuild, Some(&engine_ref.vector_index), Some(progress))
+            .run(
+                &db,
+                trigger.changes,
+                force_rebuild,
+                Some(&engine_ref.vector_index),
+                Some(progress),
+                Some(&engine_ref.event_bus),
+                &key_hints,
+            )
             .await
         {
             Ok(stats) => {
+                let elapsed_ms = run_start.elapsed().as_millis() as u64;
                 info!(repo = %repo, indexed = stats.indexed_files, "indexing complete");
                 let mut statuses = engine_ref.statuses.write().await;
                 let s = statuses.entry(repo.clone()).or_default();
@@ -434,6 +472,12 @@ async fn run_consumer(
                 // Persist durable timestamp so the MCP tool can check freshness
                 // without relying on in-memory state.
                 let _ = crate::store::ops::set_meta(&db, "last_indexed_at", &chrono::Utc::now().to_rfc3339()).await;
+                engine_ref.event_bus.emit(IndexEvent::Completed {
+                    repo: repo.clone(),
+                    indexed_files: stats.indexed_files,
+                    total_files: stats.total_files,
+                    elapsed_ms,
+                });
             }
             Err(e) => {
                 // `{e:#}` prints the full anyhow context chain on one line
@@ -444,6 +488,10 @@ async fn run_consumer(
                 let s = statuses.entry(repo.clone()).or_default();
                 s.state = IndexState::Error;
                 s.error = Some(format!("{e:#}"));
+                engine_ref.event_bus.emit(IndexEvent::Failed {
+                    repo: repo.clone(),
+                    error: format!("{e:#}"),
+                });
             }
         }
     }

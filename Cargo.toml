@@ -37,6 +37,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rmcp = { version = "1.7.0", features = ["server", "macros", "transport-streamable-http-server"] }
 tokio-util = "0.7"
+tokio-stream = { version = "0.1", features = ["sync"] }
+async-stream = "0.3"
 schemars = "1"
 
 [profile.dev.package."*"]

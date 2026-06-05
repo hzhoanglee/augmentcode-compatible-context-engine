@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use futures::StreamExt;
@@ -14,6 +15,7 @@ use crate::embedding::InputType;
 use crate::embedding::cache::EmbeddingCache;
 use crate::embedding::voyage::VoyageClient;
 use crate::indexing::ProgressHandle;
+use crate::indexing::events::{IndexEvent, IndexEventBus};
 use crate::indexing::tracker::{ChangeKind, FileChange, stat_file};
 use crate::indexing::walker::{is_under_hidden_dir, walk_repo};
 use crate::parsing::parse_file;
@@ -218,6 +220,7 @@ impl IndexPipeline {
     }
 
     /// Run the pipeline against the shared `db` handle.
+    #[allow(clippy::too_many_arguments)]
     pub async fn run(
         &self,
         db: &Surreal<Db>,
@@ -225,6 +228,8 @@ impl IndexPipeline {
         force_rebuild: bool,
         vector_index: Option<&tokio::sync::RwLock<VectorIndex>>,
         progress: Option<ProgressHandle>,
+        event_bus: Option<&IndexEventBus>,
+        key_hints: &[String],
     ) -> Result<IndexPipelineStats> {
         // Check if first run (no file_meta at all).
         let stored_meta = get_all_file_meta(db, &self.repo).await?;
@@ -238,7 +243,14 @@ impl IndexPipeline {
             } else {
                 info!(repo = %self.repo, "first run — full rebuild");
             }
-            let new_vectors = self.full_rebuild(db, progress.as_ref()).await?;
+            if let Some(bus) = event_bus {
+                bus.emit(IndexEvent::Started {
+                    repo: self.repo.clone(),
+                    total_files,
+                    is_rebuild: force_rebuild,
+                });
+            }
+            let new_vectors = self.full_rebuild(db, progress.as_ref(), event_bus, key_hints).await?;
             if let Some(vi) = vector_index {
                 let mut guard = vi.write().await;
                 guard.remove_repo(&self.repo);
@@ -279,7 +291,14 @@ impl IndexPipeline {
         }
 
         info!(repo = %self.repo, changes = file_changes.len(), "incremental index");
-        let (removed_files, new_vectors) = self.incremental_run(db, file_changes, progress.as_ref()).await?;
+        if let Some(bus) = event_bus {
+            bus.emit(IndexEvent::Started {
+                repo: self.repo.clone(),
+                total_files: file_changes.iter().filter(|c| c.kind != ChangeKind::Deleted).count() as u64,
+                is_rebuild: false,
+            });
+        }
+        let (removed_files, new_vectors) = self.incremental_run(db, file_changes, progress.as_ref(), event_bus, key_hints).await?;
 
         if let Some(vi) = vector_index {
             let mut guard = vi.write().await;
@@ -299,6 +318,8 @@ impl IndexPipeline {
         &self,
         db: &Surreal<Db>,
         progress: Option<&ProgressHandle>,
+        event_bus: Option<&IndexEventBus>,
+        key_hints: &[String],
     ) -> Result<Vec<(ChunkId, Vec<f32>)>> {
         let all_files = walk_repo(&self.repo);
         info!(repo = %self.repo, file_count = all_files.len(), "walking repo for full rebuild");
@@ -314,14 +335,24 @@ impl IndexPipeline {
 
         // Stream parse → embed → write with bounded channels.
         let chunk_vectors = self
-            .streaming_index(&all_files, db, progress)
+            .streaming_index(&all_files, db, progress, event_bus, key_hints)
             .await
             .context("full_rebuild: streaming_index")?;
 
         // Phase 2: resolve raw edges into denormalized calls rows.
+        if let Some(bus) = event_bus {
+            bus.emit(IndexEvent::Phase2Start { repo: self.repo.clone() });
+        }
+        let phase2_start = Instant::now();
         self.resolve_edges_phase2(db)
             .await
             .context("full_rebuild: resolve_edges_phase2")?;
+        if let Some(bus) = event_bus {
+            bus.emit(IndexEvent::Phase2Done {
+                repo: self.repo.clone(),
+                elapsed_ms: phase2_start.elapsed().as_millis() as u64,
+            });
+        }
 
         Ok(chunk_vectors)
     }
@@ -333,6 +364,8 @@ impl IndexPipeline {
         db: &Surreal<Db>,
         changes: Vec<FileChange>,
         progress: Option<&ProgressHandle>,
+        event_bus: Option<&IndexEventBus>,
+        key_hints: &[String],
     ) -> Result<(Vec<String>, Vec<(ChunkId, Vec<f32>)>)> {
         let to_process: Vec<String> = changes
             .iter()
@@ -380,7 +413,7 @@ impl IndexPipeline {
 
         // Stream parse → embed → write.
         let chunk_vectors = self
-            .streaming_index(&to_process, db, progress)
+            .streaming_index(&to_process, db, progress, event_bus, key_hints)
             .await
             .context("incremental_run: streaming_index")?;
 
@@ -395,9 +428,19 @@ impl IndexPipeline {
         }
 
         // Phase 2: resolve only edges touching the changed files — O(changed + callers_of_changed).
+        if let Some(bus) = event_bus {
+            bus.emit(IndexEvent::Phase2Start { repo: self.repo.clone() });
+        }
+        let phase2_start = Instant::now();
         self.resolve_edges_incremental(db, &all_affected, &pre_delete_callers)
             .await
             .context("incremental_run: resolve_edges_incremental")?;
+        if let Some(bus) = event_bus {
+            bus.emit(IndexEvent::Phase2Done {
+                repo: self.repo.clone(),
+                elapsed_ms: phase2_start.elapsed().as_millis() as u64,
+            });
+        }
 
         Ok((all_affected, chunk_vectors))
     }
@@ -413,6 +456,8 @@ impl IndexPipeline {
         files: &[String],
         db: &Surreal<Db>,
         progress: Option<&ProgressHandle>,
+        event_bus: Option<&IndexEventBus>,
+        key_hints: &[String],
     ) -> Result<Vec<(ChunkId, Vec<f32>)>> {
         if files.is_empty() {
             if let Some(ph) = progress {
@@ -430,6 +475,8 @@ impl IndexPipeline {
         let voyage = self.voyage.clone();
         let embed_concurrency = self.embed_concurrency;
         let cache_arc = self.cache.clone();
+        let event_bus_clone = event_bus.cloned();
+        let key_hints_owned: Vec<String> = key_hints.to_vec();
 
         // ── Stage 1: parallel parse (rayon), feed into bounded channel ────
         let (parse_tx, parse_rx) = mpsc::channel::<ParsedFile>(PARSE_CHANNEL_CAP);
@@ -465,6 +512,8 @@ impl IndexPipeline {
             let embed_tx_clone = embed_tx.clone();
             let progress_clone = progress.cloned();
             let cache_clone = cache_arc.clone();
+            let bus_clone = event_bus_clone.clone();
+            let hints_clone = key_hints_owned.clone();
 
             tokio::spawn(async move {
                 // Convert mpsc receiver to a stream.
@@ -478,17 +527,58 @@ impl IndexPipeline {
                         let cache_ref = cache_clone.clone();
                         let done_ref = done_counter_clone.clone();
                         let progress_ref = progress_clone.clone();
+                        let bus_ref = bus_clone.clone();
+                        let hints_ref = hints_clone.clone();
                         async move {
-                            let embeddings = embed_parsed_file(&pf, voyage_ref.as_ref(), cache_ref.as_deref()).await;
+                            let chunk_count = pf.chunks.len();
+                            let file_path = pf.path.clone();
+                            let embed_start = Instant::now();
+
+                            // Emit embed start event.
+                            if let Some(ref bus) = bus_ref {
+                                let key_hint = hints_ref.first().cloned().unwrap_or_default();
+                                let active = bus.inc_api_calls();
+                                bus.emit(IndexEvent::EmbedCallStart {
+                                    file: file_path.clone(),
+                                    chunks: chunk_count,
+                                    key_hint,
+                                    active_calls: active,
+                                });
+                            }
+
+                            let embed_result = embed_parsed_file(&pf, voyage_ref.as_ref(), cache_ref.as_deref()).await;
+
+                            // Emit embed done event.
+                            if let Some(ref bus) = bus_ref {
+                                let active = bus.dec_api_calls();
+                                bus.emit(IndexEvent::EmbedCallDone {
+                                    file: file_path.clone(),
+                                    chunks: chunk_count,
+                                    elapsed_ms: embed_start.elapsed().as_millis() as u64,
+                                    active_calls: active,
+                                    cached: embed_result.fully_cached,
+                                });
+                            }
+
                             let done = done_ref.fetch_add(1, Ordering::Relaxed) + 1;
                             if let Some(ph) = &progress_ref {
                                 ph.set_processed(done).await;
                             }
+
+                            if let Some(ref bus) = bus_ref {
+                                bus.emit(IndexEvent::FileIndexed {
+                                    file: file_path,
+                                    indexed: done,
+                                    total: total_files,
+                                    elapsed_ms: embed_start.elapsed().as_millis() as u64,
+                                });
+                            }
+
                             EmbeddedFile {
                                 path: pf.path,
                                 symbols: pf.symbols,
                                 chunks: pf.chunks,
-                                embeddings,
+                                embeddings: embed_result.embeddings,
                                 raw_edges: pf.raw_edges,
                                 mtime: pf.mtime,
                                 size: pf.size,
@@ -941,20 +1031,25 @@ fn parse_one_file(file: &str) -> Option<ParsedFile> {
 
 // ─── Embed a parsed file's chunks ────────────────────────────────────────
 
+struct EmbedFileResult {
+    embeddings: Vec<Vec<f32>>,
+    fully_cached: bool,
+}
+
 async fn embed_parsed_file(
     pf: &ParsedFile,
     voyage: Option<&VoyageClient>,
     cache: Option<&EmbeddingCache>,
-) -> Vec<Vec<f32>> {
+) -> EmbedFileResult {
     if pf.chunks.is_empty() {
-        return vec![];
+        return EmbedFileResult { embeddings: vec![], fully_cached: false };
     }
 
     let texts: Vec<String> = pf.chunks.iter().map(|c| c.content.clone()).collect();
 
     // No voyage client AND no cache → return empty embeddings (same as before).
     if voyage.is_none() && cache.is_none() {
-        return vec![vec![]; texts.len()];
+        return EmbedFileResult { embeddings: vec![vec![]; texts.len()], fully_cached: false };
     }
 
     match cache {
@@ -1018,7 +1113,7 @@ async fn embed_parsed_file(
                 for (idx, emb) in extra_embeddings {
                     result[idx] = emb;
                 }
-                result
+                EmbedFileResult { fully_cached: dim_miss_indices.is_empty(), embeddings: result }
             } else {
                 // Partial or total cache miss path.
                 let mut result = vec![vec![]; texts.len()];
@@ -1117,7 +1212,7 @@ async fn embed_parsed_file(
                     result[idx] = emb;
                 }
 
-                result
+                EmbedFileResult { fully_cached: false, embeddings: result }
             }
         }
         None => {
@@ -1125,14 +1220,14 @@ async fn embed_parsed_file(
             match voyage {
                 Some(client) => {
                     match client.embed(&texts, InputType::Document).await {
-                        Ok(embs) => embs,
+                        Ok(embs) => EmbedFileResult { fully_cached: false, embeddings: embs },
                         Err(e) => {
                             warn!(file = %pf.path, error = %e, "embed failed; storing empty embeddings");
-                            vec![vec![]; texts.len()]
+                            EmbedFileResult { fully_cached: false, embeddings: vec![vec![]; texts.len()] }
                         }
                     }
                 }
-                None => vec![vec![]; texts.len()],
+                None => EmbedFileResult { fully_cached: false, embeddings: vec![vec![]; texts.len()] },
             }
         }
     }
@@ -1352,7 +1447,7 @@ mod end_to_end_persist {
         let db = open_db(home.path(), &repo).await.expect("open db");
         let pipeline = IndexPipeline::new(repo.clone(), None);
 
-        let result = pipeline.run(&db, None, true, None, None).await;
+        let result = pipeline.run(&db, None, true, None, None, None, &[]).await;
         println!("REAL-TREE PROBE: result = {:?}", result.as_ref().map(|s| (s.indexed_files, s.total_files)));
 
         let chunks = count_chunks(&db).await.unwrap();
@@ -1377,7 +1472,7 @@ mod end_to_end_persist {
         let pipeline = IndexPipeline::new(repo.clone(), None);
 
         let stats = pipeline
-            .run(&db, None, true, None, None)
+            .run(&db, None, true, None, None, None, &[])
             .await
             .expect("full_rebuild must succeed");
 
@@ -1408,7 +1503,7 @@ mod end_to_end_persist {
 
         let db = open_db(home.path(), &repo).await.expect("open db");
         let pipeline = IndexPipeline::new(repo.clone(), None);
-        pipeline.run(&db, None, true, None, None).await.expect("rebuild");
+        pipeline.run(&db, None, true, None, None, None, &[]).await.expect("rebuild");
 
         // Check that file_meta.chunk_count > 0 for the test file.
         use serde::Deserialize;
@@ -1440,7 +1535,7 @@ mod end_to_end_persist {
 
         let db = open_db(home.path(), &repo).await.expect("open db");
         let pipeline = IndexPipeline::new(repo.clone(), None);
-        pipeline.run(&db, None, true, None, None).await.expect("rebuild");
+        pipeline.run(&db, None, true, None, None, None, &[]).await.expect("rebuild");
 
         let marker = get_meta(&db, EDGES_RESOLVED_KEY).await.unwrap();
         assert!(marker.is_some(), "edges_resolved marker must be set after full_rebuild");

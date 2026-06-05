@@ -543,6 +543,27 @@
   </div><!-- /search-page -->
 </div><!-- /container -->
 
+<!-- Indexing Progress Modal -->
+<div id="modal-index-progress" class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+  <div class="w-full max-w-2xl mx-4 bg-white dark:bg-wiki-surface border border-gray-200 dark:border-wiki-border rounded-lg shadow-2xl flex flex-col max-h-[80vh]">
+    <!-- Header -->
+    <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-wiki-border">
+      <h3 class="text-sm font-medium text-gray-900 dark:text-wiki-heading">Indexing Progress</h3>
+      <button id="btn-close-index-modal" class="text-gray-400 dark:text-wiki-text-muted hover:text-gray-700 dark:hover:text-wiki-text focus:outline-none focus:ring-2 focus:ring-blue-400 rounded p-1">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <!-- Overview stats -->
+    <div id="index-modal-stats" class="px-4 py-2 border-b border-gray-100 dark:border-wiki-border text-xs text-gray-500 dark:text-wiki-text-muted flex gap-4 flex-wrap">
+      <span id="index-stat-active-calls">API calls: 0</span>
+      <span id="index-stat-progress">Progress: —</span>
+    </div>
+    <!-- Terminal output -->
+    <div id="index-modal-terminal" class="flex-1 overflow-y-auto px-4 py-2 font-mono text-xs leading-5 text-gray-700 dark:text-wiki-text bg-gray-50 dark:bg-wiki-bg min-h-[300px] max-h-[60vh]">
+    </div>
+  </div>
+</div>
+
 <script>
 // ─── State ────────────────────────────────────────────────────────────────
 let cfg = null;
@@ -631,14 +652,17 @@ function updateRepoIndexUI() {
       } else {
         statusEl.innerHTML = '<span class="animate-pulse text-blue-500 dark:text-wiki-link">Indexing…</span>';
       }
-      btnEl.disabled = true;
+      btnEl.disabled = false;
+      btnEl.textContent = 'Show';
     } else if (s.state === 'error') {
       statusEl.innerHTML = '<span class="text-red-500 dark:text-red-400" title="' + escHtml(s.error || '') + '">Error</span>';
       btnEl.disabled = false;
+      btnEl.textContent = 'Index';
     } else {
       const count = s.indexed_files || 0;
       statusEl.textContent = count > 0 ? count + ' files' : '';
       btnEl.disabled = false;
+      btnEl.textContent = 'Index';
     }
   });
 }
@@ -767,6 +791,11 @@ function renderRepos() {
     btn.addEventListener('click', async () => {
       const repo = btn.dataset.repo;
       const repoId = encodeRepoId(repo);
+      const s = indexStatuses[repo];
+      if (s && s.state === 'indexing') {
+        openIndexModal(repo);
+        return;
+      }
       btn.disabled = true;
       const statusEl = document.getElementById('repo-status-' + repoId);
       if (statusEl) statusEl.innerHTML = '<span class="animate-pulse text-blue-500 dark:text-wiki-link">Queued…</span>';
@@ -2008,6 +2037,139 @@ document.getElementById('btn-index-all').addEventListener('click', async () => {
   btn.disabled = false;
   btn.textContent = 'Index All';
 });
+
+// ─── Index Progress Modal + SSE ──────────────────────────────────────────
+let indexEventSource = null;
+let indexModalRepo = null;
+let indexTerminalAtBottom = true;
+
+document.getElementById('index-modal-terminal').addEventListener('scroll', () => {
+  const el = document.getElementById('index-modal-terminal');
+  indexTerminalAtBottom = (el.scrollHeight - el.scrollTop - el.clientHeight) <= 20;
+});
+
+function openIndexModal(repo) {
+  indexModalRepo = repo;
+  indexTerminalAtBottom = true;
+  const modal = document.getElementById('modal-index-progress');
+  const terminal = document.getElementById('index-modal-terminal');
+  modal.classList.remove('hidden');
+  terminal.innerHTML = '';
+  document.getElementById('index-stat-active-calls').textContent = 'API calls: 0';
+  document.getElementById('index-stat-progress').textContent = 'Progress: —';
+  connectIndexSSE(repo);
+}
+
+function closeIndexModal() {
+  document.getElementById('modal-index-progress').classList.add('hidden');
+  if (indexEventSource) {
+    indexEventSource.close();
+    indexEventSource = null;
+  }
+  indexModalRepo = null;
+}
+
+document.getElementById('btn-close-index-modal').addEventListener('click', closeIndexModal);
+document.getElementById('modal-index-progress').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeIndexModal();
+});
+
+function connectIndexSSE(repo) {
+  if (indexEventSource) {
+    indexEventSource.close();
+  }
+  const repoId = encodeRepoId(repo);
+  indexEventSource = new EventSource('/api/repos/' + repoId + '/index-events');
+
+  indexEventSource.onmessage = (e) => {
+    if (!e.data) return;
+    try {
+      const event = JSON.parse(e.data);
+      handleIndexEvent(event);
+    } catch (_) {}
+  };
+
+  indexEventSource.onerror = () => {
+    // SSE disconnected (e.g., server restart). Don't close the modal —
+    // it auto-reconnects per EventSource spec.
+  };
+}
+
+function handleIndexEvent(event) {
+  const terminal = document.getElementById('index-modal-terminal');
+  const statsActive = document.getElementById('index-stat-active-calls');
+  const statsProgress = document.getElementById('index-stat-progress');
+
+  let line = '';
+  const ts = new Date().toLocaleTimeString();
+
+  switch (event.type) {
+    case 'started':
+      line = `<span class="text-blue-400">[${ts}]</span> <span class="text-green-400">Started</span> indexing — ${event.total_files} files${event.is_rebuild ? ' (rebuild)' : ''}`;
+      statsProgress.textContent = 'Progress: 0 / ' + event.total_files;
+      break;
+
+    case 'embed_call_start':
+      line = `<span class="text-blue-400">[${ts}]</span> <span class="text-yellow-400">→ embed</span> ${shortPath(event.file)} (${event.chunks} chunks) key: <span class="text-purple-400">${escHtml(event.key_hint)}</span>`;
+      statsActive.textContent = 'API calls: ' + event.active_calls;
+      break;
+
+    case 'embed_call_done':
+      if (event.cached) {
+        line = `<span class="text-blue-400">[${ts}]</span> <span class="text-gray-400">✓ cached</span> ${shortPath(event.file)} — ${event.elapsed_ms}ms (${event.chunks} chunks)`;
+      } else {
+        line = `<span class="text-blue-400">[${ts}]</span> <span class="text-green-400">✓ embed</span> ${shortPath(event.file)} — ${event.elapsed_ms}ms (${event.chunks} chunks)`;
+      }
+      statsActive.textContent = 'API calls: ' + event.active_calls;
+      break;
+
+    case 'file_indexed':
+      line = `<span class="text-blue-400">[${ts}]</span> <span class="text-cyan-400">indexed</span> ${shortPath(event.file)} <span class="text-gray-500">[${event.indexed}/${event.total}]</span> ${event.elapsed_ms}ms`;
+      statsProgress.textContent = 'Progress: ' + event.indexed + ' / ' + event.total;
+      break;
+
+    case 'phase2_start':
+      line = `<span class="text-blue-400">[${ts}]</span> <span class="text-yellow-400">Phase 2</span> resolving call graph edges…`;
+      break;
+
+    case 'phase2_done':
+      line = `<span class="text-blue-400">[${ts}]</span> <span class="text-green-400">Phase 2 done</span> — ${event.elapsed_ms}ms`;
+      break;
+
+    case 'completed':
+      line = `<span class="text-blue-400">[${ts}]</span> <span class="text-green-500 font-bold">Completed</span> — ${event.indexed_files} files indexed in ${formatDuration(event.elapsed_ms)}`;
+      statsProgress.textContent = 'Done: ' + event.indexed_files + ' / ' + event.total_files;
+      break;
+
+    case 'failed':
+      line = `<span class="text-blue-400">[${ts}]</span> <span class="text-red-500 font-bold">Failed</span>: ${escHtml(event.error)}`;
+      break;
+
+    default:
+      line = `<span class="text-blue-400">[${ts}]</span> ${JSON.stringify(event)}`;
+  }
+
+  if (line) {
+    const div = document.createElement('div');
+    div.className = 'py-0.5';
+    div.innerHTML = line;
+    terminal.appendChild(div);
+    if (indexTerminalAtBottom) terminal.scrollTop = terminal.scrollHeight;
+  }
+}
+
+function shortPath(p) {
+  if (!p) return '';
+  const parts = p.replace(/\\/g, '/').split('/');
+  if (parts.length <= 3) return escHtml(p);
+  return escHtml('…/' + parts.slice(-3).join('/'));
+}
+
+function formatDuration(ms) {
+  if (ms < 1000) return ms + 'ms';
+  const s = (ms / 1000).toFixed(1);
+  return s + 's';
+}
 </script>
 </body>
 </html>

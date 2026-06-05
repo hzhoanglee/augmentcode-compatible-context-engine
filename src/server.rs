@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::convert::Infallible;
+use std::time::Duration;
 
 use axum::{
     extract::{Json, Path, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
+    response::sse::{Event, Sse},
     routing::{delete, get, post, put},
     Router,
 };
@@ -15,6 +18,8 @@ use serde_json::{Value, json};
 use surrealdb::Surreal;
 use surrealdb::engine::local::Db;
 use tokio::sync::RwLock;
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::StreamExt;
 
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService,
@@ -137,6 +142,7 @@ pub fn build_router(
         .route("/api/repos/:repo_id/files", get(get_repo_files))
         .route("/api/repos/:repo_id/graph", get(get_repo_graph))
         .route("/api/repos/:repo_id/chunks", get(get_repo_chunks))
+        .route("/api/repos/:repo_id/index-events", get(get_index_events))
         .route("/api/index-all", post(post_index_all))
         .route("/api/index-status", get(get_index_status))
         .route("/api/query", post(post_query))
@@ -661,6 +667,72 @@ async fn post_mcp_tool(
     )
     .await;
     Json(json!({ "result": result })).into_response()
+}
+
+// ─── Index events SSE stream ─────────────────────────────────────────────
+
+/// GET /api/repos/:repo_id/index-events — SSE stream of indexing progress events.
+///
+/// Subscribes to the IndexEngine's broadcast channel and filters events for the
+/// requested repo. Sends a keepalive comment every 15s to prevent proxy timeouts.
+async fn get_index_events(
+    State(state): State<AppState>,
+    Path(repo_id): Path<String>,
+) -> Response {
+    let repo = match decode_repo_id(&repo_id) {
+        Ok(r) => r,
+        Err(r) => return r,
+    };
+
+    let rx = state.index_engine.event_bus.subscribe();
+    let stream = BroadcastStream::new(rx);
+    let repo_filter = repo.clone();
+
+    let event_stream = stream
+        .filter_map(move |result| {
+            match result {
+                Ok(event) => {
+                    let matches = match &event {
+                        crate::indexing::events::IndexEvent::Started { repo, .. } => *repo == repo_filter,
+                        crate::indexing::events::IndexEvent::FileParsed { .. } => true,
+                        crate::indexing::events::IndexEvent::EmbedCallStart { .. } => true,
+                        crate::indexing::events::IndexEvent::EmbedCallDone { .. } => true,
+                        crate::indexing::events::IndexEvent::FileIndexed { .. } => true,
+                        crate::indexing::events::IndexEvent::Phase2Start { repo } => *repo == repo_filter,
+                        crate::indexing::events::IndexEvent::Phase2Done { repo, .. } => *repo == repo_filter,
+                        crate::indexing::events::IndexEvent::Completed { repo, .. } => *repo == repo_filter,
+                        crate::indexing::events::IndexEvent::Failed { repo, .. } => *repo == repo_filter,
+                    };
+                    if matches {
+                        let data = serde_json::to_string(&event).unwrap_or_default();
+                        Some(Ok::<_, Infallible>(Event::default().data(data)))
+                    } else {
+                        None
+                    }
+                }
+                Err(_) => None,
+            }
+        })
+        .map(|e| e);
+
+    let keepalive_stream = async_stream::stream! {
+        let mut event_stream = Box::pin(event_stream);
+        let mut keepalive = tokio::time::interval(Duration::from_secs(15));
+        keepalive.tick().await; // skip first immediate tick
+
+        loop {
+            tokio::select! {
+                Some(event) = event_stream.next() => {
+                    yield event;
+                }
+                _ = keepalive.tick() => {
+                    yield Ok(Event::default().comment("keepalive"));
+                }
+            }
+        }
+    };
+
+    Sse::new(keepalive_stream).into_response()
 }
 
 // ─── Embedding cache purge ────────────────────────────────────────────────
