@@ -520,6 +520,20 @@ function encodeRepoId(path) {
 }
 
 // ─── Index status polling ─────────────────────────────────────────────────
+
+// Re-sync only cfg.repos from disk config (cheap; preserves Settings inputs).
+async function syncReposFromConfig() {
+  try {
+    const res = await fetch('/api/config');
+    if (!res.ok) return;
+    const fresh = await res.json();
+    if (fresh && Array.isArray(fresh.repos)) {
+      if (cfg) { cfg.repos = fresh.repos; } else { cfg = fresh; }
+      renderRepos();
+    }
+  } catch (_) { /* ignore */ }
+}
+
 async function pollIndexStatus() {
   try {
     const res = await fetch('/api/index-status');
@@ -530,6 +544,11 @@ async function pollIndexStatus() {
       newStatuses[item.repo] = item;
     }
     indexStatuses = newStatuses;
+    // If a repo appears in status (e.g. auto-registered by an MCP call) but is
+    // not yet in our cfg.repos, refresh the repo list without a full reload.
+    const known = (cfg && cfg.repos) ? cfg.repos : [];
+    const hasNewRepo = Object.keys(newStatuses).some(r => !known.includes(r));
+    if (hasNewRepo) { await syncReposFromConfig(); }
     updateRepoIndexUI();
   } catch (_) { /* ignore network errors in polling */ }
   scheduleNextPoll();

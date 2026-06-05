@@ -140,13 +140,36 @@ pub async fn run_codebase_retrieval(
             .to_string();
     }
 
-    // 2. Confirm path is a configured repo.
+    // 2. Auto-register the repo if it is not yet configured.
     if !settings.repos.iter().any(|r| r == repo) {
-        return format!(
-            "Error: workspace '{}' is not a configured repository. \
-             Add it in the Context Engine UI and index it first.",
-            repo
-        );
+        // Guard: path must exist and be a directory before we accept it.
+        if !std::path::Path::new(repo).is_dir() {
+            return format!(
+                "Error: workspace '{}' does not exist or is not a directory.",
+                repo
+            );
+        }
+
+        // Best-effort: append to settings.json on disk so the repo survives restart.
+        match crate::config::ensure_dir_and_load(home_dir) {
+            Ok(mut disk) => {
+                if !disk.repos.iter().any(|r| r == repo) {
+                    disk.repos.push(repo.to_string());
+                    disk.version = crate::config::CURRENT_VERSION;
+                    let target = crate::config::config_path(home_dir);
+                    if let Err(e) = crate::config::write_settings_atomic(&target, &disk) {
+                        tracing::warn!(repo = %repo, error = %e, "failed to persist auto-added repo to settings.json");
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(repo = %repo, error = %e, "failed to read settings.json for auto-add");
+            }
+        }
+
+        // Register at runtime: seed status entry + spawn watcher.
+        // Falls through to the existing freshness/trigger/wait/query flow below.
+        index_engine.register_repo(repo).await;
     }
 
     // 3. Confirm embedding keys are present.

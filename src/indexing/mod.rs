@@ -199,6 +199,25 @@ impl IndexEngine {
         engine
     }
 
+    /// Register a repository at runtime (not known at boot): seed a status entry
+    /// and spawn its filesystem watcher, mirroring what `start` does per-repo at
+    /// boot. Idempotent: if the repo already has a status entry, this is a no-op
+    /// (avoids spawning a duplicate watcher).
+    pub async fn register_repo(&self, repo: &str) {
+        {
+            let mut statuses = self.statuses.write().await;
+            if statuses.contains_key(repo) {
+                return; // already registered — don't spawn a second watcher
+            }
+            statuses.insert(repo.to_string(), RepoStatus::default());
+        }
+        let tx = self.trigger_tx.clone();
+        let repo_path = repo.to_string();
+        tokio::spawn(async move {
+            start_watcher(repo_path, tx).await;
+        });
+    }
+
     /// Send a manual trigger to index a single repo.
     pub async fn trigger_index(&self, repo: &str) -> Result<()> {
         self.trigger_tx
