@@ -92,17 +92,17 @@
                      focus:outline-none focus:ring-2 focus:ring-blue-400">
         Repositories
       </button>
-      <button role="tab" id="tab-settings" aria-selected="false" aria-controls="panel-settings"
-              class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-gray-500 dark:text-wiki-text-muted
-                     hover:text-gray-900 dark:hover:text-wiki-heading hover:border-gray-300 dark:hover:border-wiki-border
-                     focus:outline-none focus:ring-2 focus:ring-blue-400">
-        Settings
-      </button>
       <button role="tab" id="tab-mcp" aria-selected="false" aria-controls="panel-mcp"
               class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-gray-500 dark:text-wiki-text-muted
                      hover:text-gray-900 dark:hover:text-wiki-heading hover:border-gray-300 dark:hover:border-wiki-border
                      focus:outline-none focus:ring-2 focus:ring-blue-400">
         MCP
+      </button>
+      <button role="tab" id="tab-settings" aria-selected="false" aria-controls="panel-settings"
+              class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-gray-500 dark:text-wiki-text-muted
+                     hover:text-gray-900 dark:hover:text-wiki-heading hover:border-gray-300 dark:hover:border-wiki-border
+                     focus:outline-none focus:ring-2 focus:ring-blue-400">
+        Settings
       </button>
     </div>
 
@@ -307,9 +307,12 @@
           </div>
           <div>
             <label class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1"
-                   for="mcp-test-workspace">workspace_full_path</label>
+                   for="mcp-test-workspace-select">workspace_full_path</label>
+            <select id="mcp-test-workspace-select"
+                    class="w-full mb-2 border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm
+                           focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active"></select>
             <input id="mcp-test-workspace" type="text" placeholder="/absolute/path/to/repo"
-                   class="w-full border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm
+                   class="hidden w-full border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm
                           placeholder:text-gray-400 dark:placeholder:text-wiki-text-muted
                           focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
           </div>
@@ -614,8 +617,8 @@ function showVersionBanner() {
 // ─── Tab switching ─────────────────────────────────────────────────────────
 const TABS = [
   { btn: 'tab-repos',     panel: 'panel-repos' },
-  { btn: 'tab-settings',  panel: 'panel-settings' },
   { btn: 'tab-mcp',       panel: 'panel-mcp' },
+  { btn: 'tab-settings',  panel: 'panel-settings' },
 ];
 
 function activateTab(idx) {
@@ -635,7 +638,7 @@ function activateTab(idx) {
     }
   });
   // Populate MCP URLs/commands when the MCP tab becomes active.
-  if (idx === 2) { initMcpUrls(); }
+  if (idx === 1) { initMcpUrls(); }
 }
 
 TABS.forEach((t, i) => {
@@ -952,10 +955,62 @@ function initMcpUrls() {
   document.getElementById('mcp-endpoint-url').textContent = endpointUrl;
   document.getElementById('mcp-claude-cmd').textContent = claudeCmd;
 
-  // Pre-fill workspace_full_path with the first configured repo if available.
-  const workspaceInput = document.getElementById('mcp-test-workspace');
-  if (cfg && cfg.repos && cfg.repos.length > 0 && !workspaceInput.value) {
-    workspaceInput.value = cfg.repos[0];
+  initMcpWorkspaceChoices();
+}
+
+// Populate the workspace dropdown and wire its change handler (idempotent).
+let _mcpWorkspaceChangeWired = false;
+function initMcpWorkspaceChoices() {
+  const sel = document.getElementById('mcp-test-workspace-select');
+  const input = document.getElementById('mcp-test-workspace');
+  if (!sel || !input) return;
+
+  const repos = (cfg && cfg.repos) ? cfg.repos : [];
+
+  // Remember what was selected before rebuilding.
+  const prev = sel.value;
+
+  // Rebuild options.
+  sel.innerHTML = '';
+  repos.forEach(function(repo) {
+    const opt = document.createElement('option');
+    opt.value = repo;
+    opt.textContent = repo;
+    sel.appendChild(opt);
+  });
+  const customOpt = document.createElement('option');
+  customOpt.value = '__custom__';
+  customOpt.textContent = 'Custom path…';
+  sel.appendChild(customOpt);
+
+  // Restore previous selection if still valid, otherwise default.
+  if (prev === '__custom__' || repos.indexOf(prev) !== -1) {
+    sel.value = prev;
+  } else if (repos.length > 0) {
+    sel.value = repos[0];
+  } else {
+    // No repos — force custom so the user can type a path.
+    sel.value = '__custom__';
+  }
+
+  // Sync custom input visibility.
+  if (sel.value === '__custom__') {
+    input.classList.remove('hidden');
+  } else {
+    input.classList.add('hidden');
+  }
+
+  // Wire the change handler once only.
+  if (!_mcpWorkspaceChangeWired) {
+    _mcpWorkspaceChangeWired = true;
+    sel.addEventListener('change', function() {
+      if (sel.value === '__custom__') {
+        input.classList.remove('hidden');
+        input.focus();
+      } else {
+        input.classList.add('hidden');
+      }
+    });
   }
 }
 
@@ -1008,7 +1063,10 @@ async function runMcpTest() {
   const errorEl = document.getElementById('mcp-test-error');
   const outputEl = document.getElementById('mcp-test-output');
   const query = document.getElementById('mcp-test-query').value.trim();
-  const workspace = document.getElementById('mcp-test-workspace').value.trim();
+  const wsSelect = document.getElementById('mcp-test-workspace-select');
+  const workspace = (wsSelect && wsSelect.value === '__custom__')
+    ? document.getElementById('mcp-test-workspace').value.trim()
+    : (wsSelect ? wsSelect.value.trim() : document.getElementById('mcp-test-workspace').value.trim());
 
   errorEl.classList.add('hidden');
   outputEl.classList.add('hidden');
