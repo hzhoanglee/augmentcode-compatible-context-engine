@@ -2042,6 +2042,14 @@ document.getElementById('btn-index-all').addEventListener('click', async () => {
 let indexEventSource = null;
 let indexModalRepo = null;
 let indexTerminalAtBottom = true;
+// Render batching: SSE can flood thousands of events/sec on large repos.
+// Buffer lines + coalesce stat updates, then flush once per animation frame
+// so the main thread isn't starved by a reflow-per-event.
+let indexLineBuffer = [];
+let indexFlushHandle = null;     // requestAnimationFrame id, or null when idle
+let indexPendingEmbed = null;    // latest "Embed: …" text, or null = unchanged
+let indexPendingProgress = null; // latest "Progress: …" text, or null = unchanged
+const INDEX_TERMINAL_MAX_LINES = 1000; // rolling cap — bounds DOM growth
 
 document.getElementById('index-modal-terminal').addEventListener('scroll', () => {
   const el = document.getElementById('index-modal-terminal');
@@ -2051,6 +2059,13 @@ document.getElementById('index-modal-terminal').addEventListener('scroll', () =>
 function openIndexModal(repo) {
   indexModalRepo = repo;
   indexTerminalAtBottom = true;
+  indexLineBuffer = [];
+  indexPendingEmbed = null;
+  indexPendingProgress = null;
+  if (indexFlushHandle !== null) {
+    cancelAnimationFrame(indexFlushHandle);
+    indexFlushHandle = null;
+  }
   const modal = document.getElementById('modal-index-progress');
   const terminal = document.getElementById('index-modal-terminal');
   modal.classList.remove('hidden');
@@ -2066,6 +2081,13 @@ function closeIndexModal() {
     indexEventSource.close();
     indexEventSource = null;
   }
+  if (indexFlushHandle !== null) {
+    cancelAnimationFrame(indexFlushHandle);
+    indexFlushHandle = null;
+  }
+  indexLineBuffer = [];
+  indexPendingEmbed = null;
+  indexPendingProgress = null;
   indexModalRepo = null;
 }
 
@@ -2096,17 +2118,13 @@ function connectIndexSSE(repo) {
 }
 
 function handleIndexEvent(event) {
-  const terminal = document.getElementById('index-modal-terminal');
-  const statsEmbed = document.getElementById('index-stat-active-calls');
-  const statsProgress = document.getElementById('index-stat-progress');
-
   let line = '';
   const ts = new Date().toLocaleTimeString();
 
   switch (event.type) {
     case 'started':
       line = `<span class="text-blue-400">[${ts}]</span> <span class="text-green-400">Started</span> indexing — ${event.total_files} files${event.is_rebuild ? ' (rebuild)' : ''}`;
-      statsProgress.textContent = 'Progress: 0 / ' + event.total_files;
+      indexPendingProgress = 'Progress: 0 / ' + event.total_files;
       break;
 
     case 'file_parsed':
@@ -2120,10 +2138,10 @@ function handleIndexEvent(event) {
     case 'file_embedded':
       if (event.cached) {
         line = `<span class="text-blue-400">[${ts}]</span> <span class="text-gray-400">cached</span> ${shortPath(event.file)} — ${event.elapsed_ms}ms (${event.chunks} chunks)`;
-        statsEmbed.textContent = 'Embed: cached';
+        indexPendingEmbed = 'Embed: cached';
       } else {
         line = `<span class="text-blue-400">[${ts}]</span> <span class="text-green-400">embed</span> ${shortPath(event.file)} — ${event.elapsed_ms}ms (${event.chunks} chunks) key: <span class="text-purple-400">${escHtml(event.key_hint)}</span>`;
-        statsEmbed.textContent = 'Embed: api';
+        indexPendingEmbed = 'Embed: api';
       }
       break;
 
@@ -2134,7 +2152,7 @@ function handleIndexEvent(event) {
     case 'file_indexed': {
       const statusWarn = event.status === 'no_embeddings' ? ' <span class="text-yellow-400">[no embeddings]</span>' : '';
       line = `<span class="text-blue-400">[${ts}]</span> <span class="text-cyan-400">indexed</span> ${shortPath(event.file)} <span class="text-gray-500">[${event.indexed}/${event.total}]</span> ${event.total_elapsed_ms}ms${statusWarn}`;
-      statsProgress.textContent = 'Progress: ' + event.indexed + ' / ' + event.total;
+      indexPendingProgress = 'Progress: ' + event.indexed + ' / ' + event.total;
       break;
     }
 
@@ -2148,7 +2166,7 @@ function handleIndexEvent(event) {
 
     case 'completed':
       line = `<span class="text-blue-400">[${ts}]</span> <span class="text-green-500 font-bold">Completed</span> — ${event.indexed_files} files indexed in ${formatDuration(event.elapsed_ms)}`;
-      statsProgress.textContent = 'Done: ' + event.indexed_files + ' / ' + event.total_files;
+      indexPendingProgress = 'Done: ' + event.indexed_files + ' / ' + event.total_files;
       break;
 
     case 'failed':
@@ -2159,13 +2177,48 @@ function handleIndexEvent(event) {
       line = `<span class="text-blue-400">[${ts}]</span> ${JSON.stringify(event)}`;
   }
 
-  if (line) {
+  if (line) indexLineBuffer.push(line);
+  scheduleIndexFlush();
+}
+
+// Coalesce buffered lines + stat updates into a single DOM write per frame.
+function scheduleIndexFlush() {
+  if (indexFlushHandle !== null) return;
+  indexFlushHandle = requestAnimationFrame(flushIndexTerminal);
+}
+
+function flushIndexTerminal() {
+  indexFlushHandle = null;
+
+  if (indexPendingEmbed !== null) {
+    document.getElementById('index-stat-active-calls').textContent = indexPendingEmbed;
+    indexPendingEmbed = null;
+  }
+  if (indexPendingProgress !== null) {
+    document.getElementById('index-stat-progress').textContent = indexPendingProgress;
+    indexPendingProgress = null;
+  }
+
+  if (indexLineBuffer.length === 0) return;
+
+  const terminal = document.getElementById('index-modal-terminal');
+  const fragment = document.createDocumentFragment();
+  for (const line of indexLineBuffer) {
     const div = document.createElement('div');
     div.className = 'py-0.5';
     div.innerHTML = line;
-    terminal.appendChild(div);
-    if (indexTerminalAtBottom) terminal.scrollTop = terminal.scrollHeight;
+    fragment.appendChild(div);
   }
+  indexLineBuffer = [];
+  terminal.appendChild(fragment);
+
+  // Rolling cap: drop oldest rows so the DOM stays bounded on huge repos.
+  let overflow = terminal.childElementCount - INDEX_TERMINAL_MAX_LINES;
+  while (overflow-- > 0 && terminal.firstChild) {
+    terminal.removeChild(terminal.firstChild);
+  }
+
+  if (indexTerminalAtBottom) terminal.scrollTop = terminal.scrollHeight;
 }
 
 function shortPath(p) {
