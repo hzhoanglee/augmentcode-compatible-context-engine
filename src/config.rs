@@ -51,11 +51,21 @@ impl Default for EmbeddingConfig {
     }
 }
 
+fn default_min_prune_lines() -> u32 {
+    // Chunks whose line span is below this are never line-pruned by the reranker
+    // (kept whole). Pruning a small chunk saves little and risks losing context.
+    16
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LlmConfig {
     pub provider: String,
     pub rerank_model: String,
     pub api_keys: Vec<String>,
+    /// Minimum chunk line-span eligible for line-range pruning during rerank.
+    /// Chunks smaller than this are returned whole. Defaults to 16.
+    #[serde(default = "default_min_prune_lines")]
+    pub rerank_min_prune_lines: u32,
 }
 
 impl Default for LlmConfig {
@@ -64,6 +74,7 @@ impl Default for LlmConfig {
             provider: "google".to_owned(),
             rerank_model: "gemini-3.1-flash-lite".to_owned(),
             api_keys: Vec::new(),
+            rerank_min_prune_lines: default_min_prune_lines(),
         }
     }
 }

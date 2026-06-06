@@ -388,6 +388,7 @@ async fn do_query(
         &voyage_client,
         index_engine,
         repo_dbs,
+        settings.llm.rerank_min_prune_lines,
         llm_client.as_ref(),
     )
     .await

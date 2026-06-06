@@ -236,6 +236,18 @@
                         placeholder:text-gray-400 dark:placeholder:text-wiki-text-muted
                         focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
         </div>
+        <div class="mb-4">
+          <label class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1" for="llm-min-prune-lines">
+            Min prune lines
+          </label>
+          <input id="llm-min-prune-lines" type="number" min="0" step="1" placeholder="16"
+                 class="w-full border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm
+                        placeholder:text-gray-400 dark:placeholder:text-wiki-text-muted
+                        focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
+          <p class="mt-1 text-xs text-gray-400 dark:text-wiki-text-muted">
+            Chunks smaller than this many lines are returned whole; larger ones may be narrowed to relevant line ranges.
+          </p>
+        </div>
         <div class="mb-2">
           <label class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1">API keys</label>
           <div id="llm-keys-list" class="space-y-2 mb-2"></div>
@@ -913,6 +925,7 @@ function renderAll() {
   });
   document.getElementById('llm-provider').value = cfg.llm.provider || 'google';
   document.getElementById('llm-rerank-model').value = cfg.llm.rerank_model || '';
+  document.getElementById('llm-min-prune-lines').value = cfg.llm.rerank_min_prune_lines ?? 16;
   renderKeyList('llm-keys-list', cfg.llm.api_keys, (idx) => {
     cfg.llm.api_keys.splice(idx, 1);
     renderAll();
@@ -1045,6 +1058,12 @@ document.getElementById('embedding-concurrency').addEventListener('input', (e) =
 });
 document.getElementById('llm-rerank-model').addEventListener('input', (e) => {
   if (cfg) { cfg.llm.rerank_model = e.target.value; saveDebounced(); }
+});
+document.getElementById('llm-min-prune-lines').addEventListener('input', (e) => {
+  if (!cfg) return;
+  const n = parseInt(e.target.value, 10);
+  cfg.llm.rerank_min_prune_lines = (Number.isInteger(n) && n >= 0) ? n : 16;
+  saveDebounced();
 });
 document.getElementById('embedding-provider').addEventListener('change', (e) => {
   if (cfg) { cfg.embedding.provider = e.target.value; saveNow(); }

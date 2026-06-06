@@ -71,6 +71,7 @@ struct ChunkContentRow {
 ///
 /// `repo_filter`: if Some, only return results from that repo path prefix.
 /// `llm_client`: if None, rerank step is skipped.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_query(
     query: &str,
     top_k: usize,
@@ -78,6 +79,7 @@ pub async fn run_query(
     voyage_client: &VoyageClient,
     index_engine: &Arc<IndexEngine>,
     repo_dbs: &Arc<RwLock<HashMap<String, Surreal<Db>>>>,
+    min_prune_lines: u32,
     llm_client: Option<&LlmClient>,
 ) -> Result<QueryResult> {
     let total_start = Instant::now();
@@ -180,40 +182,69 @@ pub async fn run_query(
     let merged = merge_chunks(all_chunks, top_k);
     let merge_ms = merge_start.elapsed().as_millis() as u64;
 
-    // ── Step 6: Rerank ────────────────────────────────────────────────────
-    // Clone merged so we can preserve pre-rerank order for the response.
-    let pre_rerank_merged = merged.clone();
-
-    let rerank_start = Instant::now();
-    let rerank_output = reranker::rerank(query, &merged, llm_client).await;
-    let rerank_ms = rerank_start.elapsed().as_millis() as u64;
-
-    // Reorder merged according to reranked_indices.
-    let reranked_merged: Vec<MergeChunk> = rerank_output
-        .reranked_indices
+    // Read numbered content from disk ONCE per candidate. Bounded by top_k
+    // (merge caps the candidate set), so this is never an unbounded read storm.
+    // Reused for BOTH the rerank LLM payload and the final output — no double
+    // read. `None` means the file could not be read (deleted/moved since index);
+    // that chunk degrades to stored DB content and is never line-pruned.
+    let numbered: Vec<Option<String>> = merged
         .iter()
-        .filter_map(|&idx| merged.get(idx).cloned())
+        .map(|c| read_lines_from_fs(&c.file, c.line_start, c.line_end).ok())
         .collect();
 
-    // ── Step 7: Format — re-read from filesystem ──────────────────────────
-    let mut results: Vec<CodeResult> = Vec::with_capacity(reranked_merged.len());
-    for chunk in &reranked_merged {
-        let content = read_lines_from_fs(&chunk.file, chunk.line_start, chunk.line_end)
-            .unwrap_or_else(|_| chunk.content.clone());
-        results.push(CodeResult {
-            file: chunk.file.clone(),
-            line_start: chunk.line_start,
-            line_end: chunk.line_end,
-            score: chunk.score,
-            content,
-            symbol: chunk.symbol.clone(),
-        });
+    // ── Step 6: Rerank ────────────────────────────────────────────────────
+    let rerank_start = Instant::now();
+    let rerank_output = reranker::rerank(query, &merged, &numbered, min_prune_lines, llm_client).await;
+    let rerank_ms = rerank_start.elapsed().as_millis() as u64;
+
+    // ── Step 7: Format ────────────────────────────────────────────────────
+    // Build final results in reranked order. When the LLM selected line ranges
+    // for a chunk, emit one block per range (sliced from the already-read
+    // numbered text — no re-read); otherwise emit the whole chunk.
+    let mut results: Vec<CodeResult> = Vec::new();
+    for (k, &idx) in rerank_output.reranked_indices.iter().enumerate() {
+        let Some(chunk) = merged.get(idx) else { continue };
+        let numbered_text = numbered.get(idx).and_then(|n| n.as_deref());
+        let selection = rerank_output.line_selections.get(k).and_then(|s| s.as_ref());
+        match (numbered_text, selection) {
+            (Some(text), Some(ranges)) if !ranges.is_empty() => {
+                for &(s, e) in ranges {
+                    results.push(CodeResult {
+                        file: chunk.file.clone(),
+                        line_start: s,
+                        line_end: e,
+                        score: chunk.score,
+                        content: slice_numbered(text, chunk.line_start, s, e),
+                        symbol: chunk.symbol.clone(),
+                    });
+                }
+            }
+            (Some(text), _) => results.push(CodeResult {
+                file: chunk.file.clone(),
+                line_start: chunk.line_start,
+                line_end: chunk.line_end,
+                score: chunk.score,
+                content: text.to_string(),
+                symbol: chunk.symbol.clone(),
+            }),
+            (None, _) => results.push(CodeResult {
+                file: chunk.file.clone(),
+                line_start: chunk.line_start,
+                line_end: chunk.line_end,
+                score: chunk.score,
+                content: chunk.content.clone(),
+                symbol: chunk.symbol.clone(),
+            }),
+        }
     }
 
-    let mut pre_rerank_results: Vec<CodeResult> = Vec::with_capacity(pre_rerank_merged.len());
-    for chunk in &pre_rerank_merged {
-        let content = read_lines_from_fs(&chunk.file, chunk.line_start, chunk.line_end)
-            .unwrap_or_else(|_| chunk.content.clone());
+    // Pre-rerank diagnostic output, reusing the same numbered reads.
+    let mut pre_rerank_results: Vec<CodeResult> = Vec::with_capacity(merged.len());
+    for (i, chunk) in merged.iter().enumerate() {
+        let content = numbered
+            .get(i)
+            .and_then(|n| n.clone())
+            .unwrap_or_else(|| chunk.content.clone());
         pre_rerank_results.push(CodeResult {
             file: chunk.file.clone(),
             line_start: chunk.line_start,
@@ -312,4 +343,48 @@ fn read_lines_from_fs(file: &str, line_start: u32, line_end: u32) -> Result<Stri
         .collect::<Vec<_>>()
         .join("\n");
     Ok(numbered)
+}
+
+/// Slice an already-numbered chunk text (produced by `read_lines_from_fs`,
+/// first line == `chunk_start`) down to the absolute line range [s, e].
+/// Both bounds are 1-based inclusive and assumed already clamped to the chunk.
+fn slice_numbered(numbered: &str, chunk_start: u32, s: u32, e: u32) -> String {
+    let lines: Vec<&str> = numbered.lines().collect();
+    let from = s.saturating_sub(chunk_start) as usize;
+    let to = (e.saturating_sub(chunk_start) as usize + 1).min(lines.len());
+    if from >= lines.len() || from >= to {
+        return numbered.to_string();
+    }
+    lines[from..to].join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::slice_numbered;
+
+    // chunk_start=100, text holds absolute lines 100..=104 (5 lines).
+    fn sample() -> String {
+        "100: a\n101: b\n102: c\n103: d\n104: e".to_owned()
+    }
+
+    #[test]
+    fn slice_normal_in_bounds() {
+        // Keep absolute 101..=103 → middle three lines.
+        let out = slice_numbered(&sample(), 100, 101, 103);
+        assert_eq!(out, "101: b\n102: c\n103: d");
+    }
+
+    #[test]
+    fn slice_end_past_text_truncates_to_len() {
+        // File shrank: text only has 5 lines but range asks up to 110.
+        let out = slice_numbered(&sample(), 100, 102, 110);
+        assert_eq!(out, "102: c\n103: d\n104: e");
+    }
+
+    #[test]
+    fn slice_from_past_text_returns_whole() {
+        // Start beyond the available text → bail to whole numbered text.
+        let out = slice_numbered(&sample(), 100, 130, 140);
+        assert_eq!(out, sample());
+    }
 }

@@ -626,6 +626,7 @@ async fn post_query(
         &voyage_client,
         &state.index_engine,
         &state.repo_dbs,
+        settings.llm.rerank_min_prune_lines,
         llm_client.as_ref(),
     )
     .await
