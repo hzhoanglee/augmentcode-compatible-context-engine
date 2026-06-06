@@ -155,6 +155,54 @@ pub(crate) async fn load_repos_vector_index(
     merged
 }
 
+/// Restore persisted per-repo status (file count + last-indexed timestamp) from
+/// each repo's DB at boot. Without this, a repo indexed in a prior session reads
+/// `indexed_files: 0` until it is re-indexed, so the UI shows a blank count.
+///
+/// Only entries still at the untouched `Idle` default with a zero count are
+/// updated — if a watcher- or user-triggered run has already advanced a repo's
+/// status by the time this runs, that live state is left intact.
+pub(crate) async fn seed_statuses_from_db(
+    statuses: &Arc<RwLock<HashMap<String, RepoStatus>>>,
+    repo_dbs: &RepoDbMap,
+    home_dir: &std::path::Path,
+    repos: &[String],
+) {
+    for repo in repos {
+        let db = match store::get_or_open(repo_dbs, home_dir, repo).await {
+            Ok(db) => db,
+            Err(e) => {
+                warn!(repo = %repo, error = %format!("{e:#}"), "failed to open DB for status seed; skipping repo");
+                continue;
+            }
+        };
+        let indexed = match store::ops::count_indexed_files(&db, repo).await {
+            Ok(n) => n,
+            Err(e) => {
+                warn!(repo = %repo, error = %e, "failed to count indexed files for status seed; skipping repo");
+                continue;
+            }
+        };
+        if indexed == 0 {
+            continue; // never indexed — leave the default so the UI can show a placeholder
+        }
+        let last_indexed_at = store::ops::get_meta(&db, "last_indexed_at")
+            .await
+            .ok()
+            .flatten()
+            .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+            .map(|dt| dt.with_timezone(&Utc));
+
+        let mut map = statuses.write().await;
+        let s = map.entry(repo.clone()).or_default();
+        // Don't clobber a run that started after boot.
+        if s.state == IndexState::Idle && s.indexed_files == 0 {
+            s.indexed_files = indexed;
+            s.last_indexed_at = last_indexed_at;
+        }
+    }
+}
+
 impl IndexEngine {
     /// Create the engine and spawn the watcher background task.
     ///
@@ -206,7 +254,15 @@ impl IndexEngine {
         // This lets the HTTP server bind and accept requests immediately.
         {
             let vector_index_bg = Arc::clone(&engine.vector_index);
+            let statuses_bg = Arc::clone(&engine.statuses);
             tokio::spawn(async move {
+                // Restore each repo's persisted file count / last-indexed timestamp
+                // from its DB so previously-indexed repos show their count after a
+                // restart (the default seed above is 0 until a run completes this
+                // session). Only entries still at their untouched Idle default are
+                // updated, so an indexing run that started meanwhile is never clobbered.
+                seed_statuses_from_db(&statuses_bg, &repo_dbs_bg, &home_dir_bg, &repos_bg).await;
+
                 let loaded =
                     load_repos_vector_index(&repo_dbs_bg, &home_dir_bg, &repos_bg).await;
                 let mut vi = vector_index_bg.write().await;
@@ -547,5 +603,73 @@ mod load_repos_tests {
 
         // 1 (repo_one) + 2 (repo_two) = 3. Under take(1) this would be 1.
         assert_eq!(index.len(), 3, "expected all repos merged, not just the first");
+    }
+
+    /// Seed `n` file_meta rows for `repo` so count_indexed_files returns `n`.
+    async fn seed_file_meta(home: &std::path::Path, repo: &str, n: usize) {
+        let db = store::open_db(home, repo).await.expect("open_db");
+        for i in 0..n {
+            let q = format!(
+                "CREATE file_meta SET path = '{repo}/f{i}.rs', mtime = 0, size = 1, \
+                 repo = '{repo}', chunk_count = 1;"
+            );
+            db.query(&q).await.expect("seed file_meta");
+        }
+    }
+
+    /// After a restart, a repo indexed in a prior session must show its persisted
+    /// file count — not the zeroed default. A never-indexed repo must stay at 0
+    /// so the UI can render a "Not indexed" placeholder.
+    #[tokio::test]
+    async fn seeds_status_from_persisted_file_meta() {
+        let home = TempDir::new().expect("tempdir");
+        let indexed = "/proj/indexed".to_string();
+        let empty = "/proj/empty".to_string();
+
+        seed_file_meta(home.path(), &indexed, 5).await;
+        // `empty` gets a DB but no file_meta rows.
+        let _ = store::open_db(home.path(), &empty).await.expect("open_db");
+
+        let statuses: Arc<RwLock<HashMap<String, RepoStatus>>> =
+            Arc::new(RwLock::new(HashMap::new()));
+        {
+            let mut m = statuses.write().await;
+            m.insert(indexed.clone(), RepoStatus::default());
+            m.insert(empty.clone(), RepoStatus::default());
+        }
+
+        let repo_dbs: RepoDbMap = Arc::new(RwLock::new(HashMap::new()));
+        seed_statuses_from_db(&statuses, &repo_dbs, home.path(), &[indexed.clone(), empty.clone()])
+            .await;
+
+        let m = statuses.read().await;
+        assert_eq!(m[&indexed].indexed_files, 5, "indexed repo must restore its file count");
+        assert_eq!(m[&empty].indexed_files, 0, "never-indexed repo must stay at 0");
+    }
+
+    /// A run that has already advanced a repo's status by the time the seed task
+    /// runs must not be clobbered back to the persisted (possibly stale) count.
+    #[tokio::test]
+    async fn seed_does_not_clobber_live_run() {
+        let home = TempDir::new().expect("tempdir");
+        let repo = "/proj/live".to_string();
+        seed_file_meta(home.path(), &repo, 5).await;
+
+        let statuses: Arc<RwLock<HashMap<String, RepoStatus>>> =
+            Arc::new(RwLock::new(HashMap::new()));
+        {
+            let mut m = statuses.write().await;
+            m.insert(
+                repo.clone(),
+                RepoStatus { state: IndexState::Indexing, ..Default::default() },
+            );
+        }
+
+        let repo_dbs: RepoDbMap = Arc::new(RwLock::new(HashMap::new()));
+        seed_statuses_from_db(&statuses, &repo_dbs, home.path(), &[repo.clone()]).await;
+
+        let m = statuses.read().await;
+        assert_eq!(m[&repo].state, IndexState::Indexing, "in-flight run must survive the seed");
+        assert_eq!(m[&repo].indexed_files, 0, "seed must not overwrite a live run's numerator");
     }
 }

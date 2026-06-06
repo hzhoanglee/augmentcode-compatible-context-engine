@@ -634,6 +634,7 @@ function updateRepoIndexUI() {
     const btnEl = document.getElementById('repo-index-btn-' + encodeRepoId(repo));
     if (!statusEl || !btnEl) return;
     const s = indexStatuses[repo];
+    statusEl.className = 'text-xs text-gray-400 dark:text-wiki-text-muted whitespace-nowrap';
     if (!s) {
       statusEl.textContent = '';
       btnEl.disabled = false;
@@ -660,7 +661,12 @@ function updateRepoIndexUI() {
       btnEl.textContent = 'Index';
     } else {
       const count = s.indexed_files || 0;
-      statusEl.textContent = count > 0 ? count + ' files' : '';
+      if (count > 0) {
+        statusEl.textContent = count + ' files';
+      } else {
+        statusEl.textContent = 'Not indexed';
+        statusEl.className += ' italic';
+      }
       btnEl.disabled = false;
       btnEl.textContent = 'Index';
     }
