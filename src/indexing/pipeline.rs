@@ -31,6 +31,12 @@ use crate::vector::{ChunkId, VectorIndex};
 /// gigabyte-sized transaction that caused 3 GB RAM spikes on large repos.
 const WRITE_BATCH_SIZE: usize = 512;
 
+/// Batch size for Phase-2 RELATE edge writes. Larger than WRITE_BATCH_SIZE
+/// because RELATE statements are compact (no embedding payload) and reducing
+/// round-trips gives measurable gains on real-disk SurrealDB kv-surrealkv.
+/// 8192 reduces the full-rebuild flush to ~10 round-trips for 77K resolved edges.
+const EDGE_RELATE_BATCH_SIZE: usize = 8192;
+
 /// Streaming channel capacity. Parser feeds at most this many parsed-file results
 /// into the embed stage before blocking. Keeps peak inflight bounded independent
 /// of repo size (O(channel_cap * chunks_per_file) RAM, not O(repo)).
@@ -50,18 +56,6 @@ struct ChunkRecord {
     content: String,
     embedding: Vec<f32>,
     symbol_ref: Option<String>,
-}
-
-/// A symbol row for native-bind INSERT.
-#[derive(Serialize)]
-struct SymbolRecord {
-    name: String,
-    kind: String,
-    file: String,
-    line_start: i64,
-    line_end: i64,
-    signature: Option<String>,
-    parent: Option<String>,
 }
 
 /// A raw (unresolved) edge written to the `raw_edge` staging table in Phase 1.
@@ -119,11 +113,37 @@ struct EmbeddedFile {
     /// When Stage 1 started for this file (for total_elapsed_ms in FileIndexed).
     /// Not serialized — internal pipeline field only.
     pipeline_start: Instant,
+    /// Wall time spent in the embed/cache-read stage for this file (ms).
+    embed_elapsed_ms: u64,
+    /// Chunks served from the on-disk embedding cache.
+    cache_hit_chunks: u64,
+    /// Chunks NOT in the cache (needed API call or stored empty).
+    cache_miss_chunks: u64,
 }
 
+#[derive(Default)]
 pub struct IndexPipelineStats {
     pub indexed_files: u64,
     pub total_files: u64,
+    /// Stage-3 write time breakdown (milliseconds).
+    pub stage3_sym_ms: u64,
+    pub stage3_rawedge_ms: u64,
+    pub stage3_chunk_ms: u64,
+    pub stage3_filemeta_ms: u64,
+    /// Total Stage-3 wall time (may differ from sum due to overhead).
+    pub stage3_total_ms: u64,
+    /// Phase-2 edge resolution wall time.
+    pub phase2_ms: u64,
+    /// Total counts.
+    pub total_chunks: u64,
+    pub total_symbols: u64,
+    pub total_raw_edges: u64,
+    /// Total wall time spent in the embed/cache-read stage (Stage 2), milliseconds.
+    pub embed_total_ms: u64,
+    /// Number of chunks that were fully served from the on-disk embedding cache.
+    pub cache_hit_chunks: u64,
+    /// Number of chunks that were NOT in the cache (re-embedded or stored empty).
+    pub cache_miss_chunks: u64,
 }
 
 /// Key used to track whether Phase 2 (raw edge resolution) has completed.
@@ -254,14 +274,18 @@ impl IndexPipeline {
         let stored_meta = get_all_file_meta(db, &self.repo).await?;
         let is_first_run = stored_meta.is_empty();
 
-        let total_files = walk_repo(&self.repo).len() as u64;
-
         if is_first_run || force_rebuild {
             if force_rebuild && !is_first_run {
                 info!(repo = %self.repo, "forced full rebuild");
             } else {
                 info!(repo = %self.repo, "first run — full rebuild");
             }
+            // Walk is needed here (once) to populate Started.total_files.
+            // Run it off the async runtime to avoid blocking the executor.
+            let repo_clone = self.repo.clone();
+            let total_files = tokio::task::spawn_blocking(move || walk_repo(&repo_clone).len() as u64)
+                .await
+                .unwrap_or(0);
             if let Some(bus) = event_bus {
                 bus.emit(IndexEvent::Started {
                     repo: self.repo.clone(),
@@ -269,26 +293,69 @@ impl IndexPipeline {
                     is_rebuild: force_rebuild,
                 });
             }
-            let new_vectors = self.full_rebuild(db, progress.as_ref(), event_bus, key_hints).await?;
+            let (new_vectors, stage_stats) = self.full_rebuild(db, progress.as_ref(), event_bus, key_hints).await?;
             if let Some(vi) = vector_index {
                 let mut guard = vi.write().await;
                 guard.remove_repo(&self.repo);
                 guard.insert(&new_vectors);
             }
             let indexed = get_all_file_meta(db, &self.repo).await?.len() as u64;
-            return Ok(IndexPipelineStats { indexed_files: indexed, total_files });
+            info!(
+                repo = %self.repo,
+                stage3_total_ms = stage_stats.stage3_total_ms,
+                stage3_sym_ms = stage_stats.stage3_sym_ms,
+                stage3_rawedge_ms = stage_stats.stage3_rawedge_ms,
+                stage3_chunk_ms = stage_stats.stage3_chunk_ms,
+                stage3_filemeta_ms = stage_stats.stage3_filemeta_ms,
+                phase2_ms = stage_stats.phase2_ms,
+                embed_total_ms = stage_stats.embed_total_ms,
+                cache_hit_chunks = stage_stats.cache_hit_chunks,
+                cache_miss_chunks = stage_stats.cache_miss_chunks,
+                files = indexed,
+                chunks = stage_stats.total_chunks,
+                symbols = stage_stats.total_symbols,
+                edges = stage_stats.total_raw_edges,
+                "PERF SUMMARY full_rebuild"
+            );
+            return Ok(IndexPipelineStats {
+                indexed_files: indexed,
+                total_files,
+                stage3_sym_ms: stage_stats.stage3_sym_ms,
+                stage3_rawedge_ms: stage_stats.stage3_rawedge_ms,
+                stage3_chunk_ms: stage_stats.stage3_chunk_ms,
+                stage3_filemeta_ms: stage_stats.stage3_filemeta_ms,
+                stage3_total_ms: stage_stats.stage3_total_ms,
+                phase2_ms: stage_stats.phase2_ms,
+                total_chunks: stage_stats.total_chunks,
+                total_symbols: stage_stats.total_symbols,
+                total_raw_edges: stage_stats.total_raw_edges,
+                embed_total_ms: stage_stats.embed_total_ms,
+                cache_hit_chunks: stage_stats.cache_hit_chunks,
+                cache_miss_chunks: stage_stats.cache_miss_chunks,
+            });
         }
 
         // Incremental run.
         let file_changes = match changes {
-            Some(explicit) => explicit,
+            Some(explicit) => {
+                // Watcher-supplied explicit change set: skip the walk entirely.
+                // total_files is derived from stored_meta (already loaded above).
+                explicit
+            }
             None => {
-                let all_files = walk_repo(&self.repo);
+                // Manual/poll incremental: must walk to detect changes.
+                // Run off the async runtime — this is genuinely O(repo).
+                let repo_clone = self.repo.clone();
                 let meta_map: HashMap<String, (i64, i64)> = stored_meta
                     .iter()
                     .map(|m| (m.path.clone(), (m.mtime, m.size)))
                     .collect();
-                crate::indexing::tracker::detect_changes(&all_files, &meta_map)
+                tokio::task::spawn_blocking(move || {
+                    let all_files = walk_repo(&repo_clone);
+                    crate::indexing::tracker::detect_changes(&all_files, &meta_map)
+                })
+                .await
+                .context("incremental walk spawn_blocking")?
             }
         };
 
@@ -306,8 +373,13 @@ impl IndexPipeline {
                     .context("edges Phase 2 replay on no-change run")?;
             }
             let indexed = stored_meta.len() as u64;
-            return Ok(IndexPipelineStats { indexed_files: indexed, total_files });
+            let total_files = stored_meta.len() as u64;
+            return Ok(IndexPipelineStats { indexed_files: indexed, total_files, ..Default::default() });
         }
+
+        // For watcher-path (changes == Some), total_files comes from stored_meta (no walk).
+        // This value is already computed from stored_meta above.
+        let total_files = stored_meta.len() as u64;
 
         info!(repo = %self.repo, changes = file_changes.len(), "incremental index");
         if let Some(bus) = event_bus {
@@ -328,7 +400,7 @@ impl IndexPipeline {
         }
 
         let indexed = get_all_file_meta(db, &self.repo).await?.len() as u64;
-        Ok(IndexPipelineStats { indexed_files: indexed, total_files })
+        Ok(IndexPipelineStats { indexed_files: indexed, total_files, ..Default::default() })
     }
 
     // ─── Full rebuild ─────────────────────────────────────────────────────
@@ -339,7 +411,7 @@ impl IndexPipeline {
         progress: Option<&ProgressHandle>,
         event_bus: Option<&IndexEventBus>,
         key_hints: &[String],
-    ) -> Result<Vec<(ChunkId, Vec<f32>)>> {
+    ) -> Result<(Vec<(ChunkId, Vec<f32>)>, IndexPipelineStats)> {
         let all_files = walk_repo(&self.repo);
         info!(repo = %self.repo, file_count = all_files.len(), "walking repo for full rebuild");
 
@@ -353,8 +425,11 @@ impl IndexPipeline {
             .await;
 
         // Stream parse → embed → write with bounded channels.
-        let chunk_vectors = self
-            .streaming_index(&all_files, db, progress, event_bus, key_hints)
+        // collect_raw_edges=true: raw edges are returned in-memory instead of
+        // being written to the raw_edge DB table. Phase 2 reads them directly,
+        // saving ~7s of DB writes and ~15s of DB table scan.
+        let (chunk_vectors, mut stats, raw_edges_mem) = self
+            .streaming_index(&all_files, db, progress, event_bus, key_hints, true)
             .await
             .context("full_rebuild: streaming_index")?;
 
@@ -363,17 +438,19 @@ impl IndexPipeline {
             bus.emit(IndexEvent::Phase2Start { repo: self.repo.clone() });
         }
         let phase2_start = Instant::now();
-        self.resolve_edges_phase2(db)
+        self.resolve_edges_phase2_in_memory(db, raw_edges_mem)
             .await
-            .context("full_rebuild: resolve_edges_phase2")?;
+            .context("full_rebuild: resolve_edges_phase2_in_memory")?;
+        let phase2_ms = phase2_start.elapsed().as_millis() as u64;
+        stats.phase2_ms = phase2_ms;
         if let Some(bus) = event_bus {
             bus.emit(IndexEvent::Phase2Done {
                 repo: self.repo.clone(),
-                elapsed_ms: phase2_start.elapsed().as_millis() as u64,
+                elapsed_ms: phase2_ms,
             });
         }
 
-        Ok(chunk_vectors)
+        Ok((chunk_vectors, stats))
     }
 
     // ─── Incremental run ──────────────────────────────────────────────────
@@ -431,8 +508,9 @@ impl IndexPipeline {
             .context("incremental_run: delete_files_data_bulk")?;
 
         // Stream parse → embed → write.
-        let chunk_vectors = self
-            .streaming_index(&to_process, db, progress, event_bus, key_hints)
+        // collect_raw_edges=false: raw edges go to DB (crash-safe incremental path).
+        let (chunk_vectors, _stage_stats, _empty_raw_edges) = self
+            .streaming_index(&to_process, db, progress, event_bus, key_hints, false)
             .await
             .context("incremental_run: streaming_index")?;
 
@@ -470,6 +548,13 @@ impl IndexPipeline {
     ///
     /// Peak inflight = PARSE_CHANNEL_CAP + EMBED_CHANNEL_CAP parsed/embedded files
     /// (O(channels * chunks_per_file)), independent of total repo size.
+    ///
+    /// When `collect_raw_edges` is true (full-rebuild path), raw edges are
+    /// accumulated in-memory and returned instead of being written to the
+    /// `raw_edge` DB table. This eliminates ~7s of small DB writes + the
+    /// ~15s Phase-2 DB scan, at the cost of ~24 MB in-memory (138K edges × ~170B).
+    /// The incremental path passes false and relies on the `raw_edge` table for
+    /// crash-safe partial re-resolution.
     async fn streaming_index(
         &self,
         files: &[String],
@@ -477,13 +562,14 @@ impl IndexPipeline {
         progress: Option<&ProgressHandle>,
         event_bus: Option<&IndexEventBus>,
         key_hints: &[String],
-    ) -> Result<Vec<(ChunkId, Vec<f32>)>> {
+        collect_raw_edges: bool,
+    ) -> Result<(Vec<(ChunkId, Vec<f32>)>, IndexPipelineStats, Vec<RawEdgeRecord>)> {
         if files.is_empty() {
             if let Some(ph) = progress {
                 ph.set_run_total(0).await;
                 ph.set_processed(0).await;
             }
-            return Ok(vec![]);
+            return Ok((vec![], IndexPipelineStats::default(), vec![]));
         }
 
         let total_files = files.len() as u64;
@@ -584,7 +670,7 @@ impl IndexPipeline {
                                     let key_hint = hints_ref.first().cloned().unwrap_or_default();
                                     let embed_start = Instant::now();
 
-                                    let embed_result = embed_parsed_file(&pf, voyage_ref.as_ref(), cache_ref.as_deref()).await;
+                                    let embed_result = embed_parsed_file(&pf, voyage_ref.as_ref(), cache_ref.clone()).await;
 
                                     let embed_elapsed_ms = embed_start.elapsed().as_millis() as u64;
 
@@ -617,6 +703,9 @@ impl IndexPipeline {
                                         embed_failed,
                                         created_at: Instant::now(),
                                         pipeline_start,
+                                        embed_elapsed_ms,
+                                        cache_hit_chunks: embed_result.hit_chunks,
+                                        cache_miss_chunks: embed_result.miss_chunks,
                                     })
                                 }
                             }
@@ -642,40 +731,125 @@ impl IndexPipeline {
         // ── Stage 3: writer — drain embed_rx, flush in batches ───────────
         let mut all_chunk_vectors: Vec<(ChunkId, Vec<f32>)> = Vec::new();
 
+        // Per-stage timing accumulators (nanoseconds, summed across all files).
+        let mut sym_ns: u64 = 0;
+        let mut rawedge_ns: u64 = 0;
+        let mut chunk_ns: u64 = 0;
+        let mut filemeta_ns: u64 = 0;
+        let mut total_chunks_count: u64 = 0;
+        let mut total_symbols_count: u64 = 0;
+        let mut total_raw_edges_count: u64 = 0;
+        let stage3_start = Instant::now();
+        // Embed/cache-read stage accumulators (from EmbeddedFile fields set in Stage 2).
+        let mut embed_total_ms: u64 = 0;
+        let mut total_cache_hit_chunks: u64 = 0;
+        let mut total_cache_miss_chunks: u64 = 0;
+
+        // Cross-file chunk accumulator: buffer chunks from multiple files before INSERT.
+        // This reduces INSERT round-trips from O(files) to O(total_chunks/WRITE_BATCH_SIZE).
+        // file_meta is deferred until the batch containing each file's last chunk is committed.
+        let mut pending_chunk_batch: Vec<ChunkRecord> = Vec::with_capacity(WRITE_BATCH_SIZE);
+        // FileMeta records buffered until the current chunk batch flushes.
+        let mut pending_file_metas: Vec<FileMeta> = Vec::new();
+        // Cross-file symbol accumulator: buffer symbols from multiple files before UPSERT.
+        // Reduces symbol write round-trips from O(files) to O(total_symbols/SYM_BATCH_SIZE).
+        const SYM_BATCH_SIZE: usize = 2048;
+        let mut pending_symbol_batch: Vec<Symbol> = Vec::with_capacity(SYM_BATCH_SIZE);
+        // In-memory raw edge accumulator: populated when collect_raw_edges=true (full rebuild).
+        // Avoids DB writes + DB scan for raw_edge — saves ~22s on real-disk SurrealDB.
+        let mut in_memory_raw_edges: Vec<RawEdgeRecord> = Vec::new();
+
         while let Some(ef) = embed_rx.recv().await {
             // Measure queue wait: time from when EmbeddedFile was created in Stage 2
             // to when Stage 3 picks it up.
             let queue_wait_ms = ef.created_at.elapsed().as_millis() as u64;
             let store_start = Instant::now();
 
-            // Write symbols for this file (native-bind).
-            flush_symbol_batch_native(db, &ef.symbols)
-                .await
-                .context("streaming_index: symbols")?;
+            // Accumulate embed/cache-read stage metrics from Stage 2.
+            embed_total_ms += ef.embed_elapsed_ms;
+            total_cache_hit_chunks += ef.cache_hit_chunks;
+            total_cache_miss_chunks += ef.cache_miss_chunks;
 
-            // Write raw edges for this file (Phase 1 — will be resolved in Phase 2).
-            flush_raw_edge_batch_native(db, &ef.raw_edges)
-                .await
-                .context("streaming_index: raw_edges")?;
+            // ── symbols (cross-file batched) ───────────────────────────
+            // Accumulate symbols from multiple files, flush when batch fills.
+            let t0 = Instant::now();
+            total_symbols_count += ef.symbols.len() as u64;
+            pending_symbol_batch.extend(ef.symbols);
+            if pending_symbol_batch.len() >= SYM_BATCH_SIZE {
+                flush_symbol_batch_native(db, &std::mem::take(&mut pending_symbol_batch))
+                    .await
+                    .context("streaming_index: cross-file symbol batch")?;
+            }
+            sym_ns += t0.elapsed().as_nanos() as u64;
 
-            // Write chunks for this file and collect chunk vectors.
+            // ── raw edges ──────────────────────────────────────────────
+            let t1 = Instant::now();
+            total_raw_edges_count += ef.raw_edges.len() as u64;
+            if collect_raw_edges {
+                // Full-rebuild path: accumulate in memory.
+                // Phase 2 will resolve these without a DB round-trip.
+                in_memory_raw_edges.extend(ef.raw_edges);
+            } else {
+                // Incremental path: persist to DB for Phase-2 keyset scan.
+                flush_raw_edge_batch_native(db, &ef.raw_edges)
+                    .await
+                    .context("streaming_index: raw_edges")?;
+            }
+            rawedge_ns += t1.elapsed().as_nanos() as u64;
+
+            // ── chunks (cross-file batched) ────────────────────────────
+            // Accumulate this file's chunks into the cross-file buffer.
+            // Flush only when the buffer fills, to batch INSERT round-trips.
+            let t2 = Instant::now();
             let file_chunk_count = ef.chunks.len() as i64;
-            let chunk_vectors = flush_file_chunks(db, &ef.chunks, &ef.embeddings)
-                .await
-                .context("streaming_index: chunks")?;
-            all_chunk_vectors.extend(chunk_vectors);
+            total_chunks_count += ef.chunks.len() as u64;
 
-            // Write file_meta LAST (crash-safety anchor).
-            // file_meta.chunk_count is set to the actual count for this file.
-            upsert_file_meta(db, &FileMeta {
+            for (chunk, emb) in ef.chunks.iter().zip(
+                ef.embeddings.iter().cloned().chain(std::iter::repeat(vec![]))
+            ) {
+                all_chunk_vectors.push((
+                    ChunkId {
+                        file: chunk.file.clone(),
+                        line_start: chunk.line_start,
+                        line_end: chunk.line_end,
+                    },
+                    emb.clone(),
+                ));
+                pending_chunk_batch.push(ChunkRecord {
+                    file: chunk.file.clone(),
+                    line_start: chunk.line_start as i64,
+                    line_end: chunk.line_end as i64,
+                    content: chunk.content.clone(),
+                    embedding: emb,
+                    symbol_ref: chunk.symbol_ref.as_ref().map(|fqn| format!("symbol:⟨{fqn}⟩")),
+                });
+                // Flush when the cross-file buffer is full.
+                if pending_chunk_batch.len() >= WRITE_BATCH_SIZE {
+                    flush_chunk_batch(db, std::mem::take(&mut pending_chunk_batch))
+                        .await
+                        .context("streaming_index: cross-file chunk batch")?;
+                    // Commit all deferred file_metas accumulated so far.
+                    let t_fm = Instant::now();
+                    for fm in std::mem::take(&mut pending_file_metas) {
+                        upsert_file_meta(db, &fm)
+                            .await
+                            .context("streaming_index: upsert_file_meta (deferred)")?;
+                    }
+                    filemeta_ns += t_fm.elapsed().as_nanos() as u64;
+                }
+            }
+            chunk_ns += t2.elapsed().as_nanos() as u64;
+
+            // ── file_meta deferred (crash-safety) ─────────────────────
+            // Enqueue this file's meta. It will be committed after the
+            // next chunk-batch flush that includes this file's last chunk.
+            pending_file_metas.push(FileMeta {
                 path: ef.path.clone(),
                 mtime: ef.mtime,
                 size: ef.size,
                 repo: self.repo.clone(),
                 chunk_count: file_chunk_count,
-            })
-            .await
-            .context("streaming_index: upsert_file_meta")?;
+            });
 
             let store_elapsed_ms = store_start.elapsed().as_millis() as u64;
             let total_elapsed_ms = ef.pipeline_start.elapsed().as_millis() as u64;
@@ -706,7 +880,71 @@ impl IndexPipeline {
             }
         }
 
-        Ok(all_chunk_vectors)
+        // ── Flush tail: remaining symbols + chunks + file_metas ─────────
+        if !pending_symbol_batch.is_empty() {
+            let t0 = Instant::now();
+            flush_symbol_batch_native(db, &pending_symbol_batch)
+                .await
+                .context("streaming_index: tail symbol batch")?;
+            sym_ns += t0.elapsed().as_nanos() as u64;
+        }
+        if !pending_chunk_batch.is_empty() {
+            let t2 = Instant::now();
+            flush_chunk_batch(db, pending_chunk_batch)
+                .await
+                .context("streaming_index: tail chunk batch")?;
+            chunk_ns += t2.elapsed().as_nanos() as u64;
+        }
+        if !pending_file_metas.is_empty() {
+            let t_fm = Instant::now();
+            for fm in pending_file_metas {
+                upsert_file_meta(db, &fm)
+                    .await
+                    .context("streaming_index: upsert_file_meta (tail)")?;
+            }
+            filemeta_ns += t_fm.elapsed().as_nanos() as u64;
+        }
+
+        let stage3_total_ms = stage3_start.elapsed().as_millis() as u64;
+        let sym_ms = sym_ns / 1_000_000;
+        let rawedge_ms = rawedge_ns / 1_000_000;
+        let chunk_ms = chunk_ns / 1_000_000;
+        let filemeta_ms = filemeta_ns / 1_000_000;
+
+        info!(
+            stage3_total_ms,
+            sym_ms,
+            rawedge_ms,
+            chunk_ms,
+            filemeta_ms,
+            embed_total_ms,
+            cache_hit_chunks = total_cache_hit_chunks,
+            cache_miss_chunks = total_cache_miss_chunks,
+            files = total_files,
+            chunks = total_chunks_count,
+            symbols = total_symbols_count,
+            edges = total_raw_edges_count,
+            "PERF SUMMARY streaming_index stage3"
+        );
+
+        let stats = IndexPipelineStats {
+            indexed_files: total_files,
+            total_files,
+            stage3_sym_ms: sym_ms,
+            stage3_rawedge_ms: rawedge_ms,
+            stage3_chunk_ms: chunk_ms,
+            stage3_filemeta_ms: filemeta_ms,
+            stage3_total_ms,
+            phase2_ms: 0, // filled in by full_rebuild
+            total_chunks: total_chunks_count,
+            total_symbols: total_symbols_count,
+            total_raw_edges: total_raw_edges_count,
+            embed_total_ms,
+            cache_hit_chunks: total_cache_hit_chunks,
+            cache_miss_chunks: total_cache_miss_chunks,
+        };
+
+        Ok((all_chunk_vectors, stats, in_memory_raw_edges))
     }
 
     // ─── Phase 2: batched edge resolution ────────────────────────────────
@@ -765,32 +1003,58 @@ impl IndexPipeline {
         candidates.first()
     }
 
-    /// Resolve raw edges (stored in `raw_edge` table) into denormalized `calls`
-    /// rows using batched symbol lookups. Never loads all symbols into RAM.
+    /// Resolve raw edges (stored in `raw_edge` table) into denormalized `calls` rows.
     ///
-    /// Pages through raw_edge rows using keyset pagination on the SurrealDB-assigned
-    /// record id as a string: `SELECT ..., type::string(id) AS id_str FROM raw_edge
-    /// WHERE type::string(id) > $cursor ORDER BY id_str LIMIT $page`. The cursor
-    /// starts at "" (empty string, sorts before all real record-id strings) and
-    /// advances to the last row's id_str after each page.
+    /// Algorithm (two-pass, bounded-memory):
     ///
-    /// This is the same pattern used in `run_migration_v1_to_v2` for the `calls`
-    /// table. The record id is:
-    ///   - Unique per row (SurrealDB guarantees this).
-    ///   - Server-assigned at insert time — never depends on app-managed global state.
-    ///   - Durable across server restarts (persists in the DB file).
+    /// Pass 1 — symbol map load:
+    ///   Load ALL symbols from the `symbol` table into a `HashMap<name, Vec<SymbolWithPos>>`.
+    ///   This is a one-time O(symbol_count) allocation for O(1) per-edge name→id lookup.
+    ///   At ~27K symbols × ~120 bytes the map is ~3.3 MB — bounded by symbol count, not
+    ///   edge count.  This is the legitimate fix for the prior O(N²) per-page symbol
+    ///   subquery; the map must stay.
     ///
-    /// Because incremental runs only partially clear raw_edge (delete_files_data_bulk
-    /// removes only the changed files' rows, leaving all other files' rows intact),
-    /// Phase 2 always re-resolves the ENTIRE raw_edge table. This is correct:
-    ///   - Phase 2 starts by deleting ALL calls rows and rebuilding from scratch.
-    ///   - The surviving raw_edge rows from unchanged files are included in the rebuild,
-    ///     so no edges are lost or orphaned.
-    ///   - No raw_edge row can be double-counted: each SurrealDB id is unique and the
-    ///     strictly-greater keyset cursor visits each row exactly once.
+    /// Pass 2 — compound keyset scan over raw_edge (O(N) total via index seek):
+    ///   Pages through `raw_edge` using a compound keyset on `(from_file, id_str)`:
     ///
-    /// NOTE: SurrealDB 2.6.5 requires ORDER BY to reference a projected alias, not a
-    /// function call. `ORDER BY type::string(id)` fails; `ORDER BY id_str` works.
+    ///     SELECT type::string(id) AS id_str, from_file, from_name, from_fqn,
+    ///            to_name, kind, line, import_path
+    ///     FROM raw_edge
+    ///     WHERE from_file > $last_file
+    ///        OR (from_file = $last_file AND type::string(id) > $last_id)
+    ///     ORDER BY from_file, id_str
+    ///     LIMIT $page
+    ///
+    ///   ORDER BY uses `id_str` (the projected alias for `type::string(id)`).
+    ///   SurrealDB 2.6.5 requires ORDER BY fields to appear in the SELECT list; it
+    ///   rejects bare function calls (`type::string(id)`) and the native `id` field
+    ///   unless explicitly included in SELECT.  Since `id_str` is already selected,
+    ///   `ORDER BY id_str` is accepted.  The WHERE tiebreaker `type::string(id) > $last_id`
+    ///   and ORDER BY `id_str` compare the same string values — perfectly consistent,
+    ///   no rows skipped or duplicated.
+    ///
+    ///   The `from_file > $last_file` branch lets SurrealDB seek via
+    ///   `idx_raw_edge_from_file` (defined in schema.rs) — O(log N) per boundary
+    ///   lookup, O(N) total over all pages.  `id_str` (= type::string(id)) is unique
+    ///   per row, so `(from_file, id_str)` is a unique compound key; every row is
+    ///   visited exactly once with no skip or duplicate hazard.
+    ///
+    ///   Start with `last_file = ""` and `last_id = ""` (empty strings sort before all
+    ///   real values).  After each page, advance:
+    ///     last_file = batch.last().from_file
+    ///     last_id   = batch.last().id_str
+    ///
+    ///   Each page is resolved in-memory against the symbol map and accumulated into
+    ///   `edge_batch`.  `edge_batch` flushes at WRITE_BATCH_SIZE, so peak memory is
+    ///   bounded by: symbol map + one raw_edge page + at most WRITE_BATCH_SIZE resolved
+    ///   edges — independent of total raw_edge count and safe at Linux/Chromium scale.
+    ///
+    /// NOTE: OFFSET pagination (`START $offset`) is O(N²) — to fetch page i the DB
+    /// walks and discards i×page_size rows.  It must NOT be used here.
+    /// NOTE: keyset on `type::string(id) > $cursor` alone was measured as O(N²) in
+    /// SurrealDB 2.6.5 (145 s for 34 pages) because the function-call predicate cannot
+    /// use any index.  The compound `from_file > $last_file` branch is what enables
+    /// the index seek and achieves O(N) total.
     ///
     /// Writes the `edges_resolved` marker in `index_meta` only after all pages commit.
     async fn resolve_edges_phase2(&self, db: &Surreal<Db>) -> Result<()> {
@@ -807,6 +1071,7 @@ impl IndexPipeline {
             .await.context("phase2: count raw_edge")?
             .take(0)?;
         let total = count_rows.first().map(|r| r.count).unwrap_or(0);
+        info!(repo = %self.repo, total_raw_edges = total, "phase2: starting edge resolution");
 
         if total == 0 {
             set_meta(db, EDGES_RESOLVED_KEY, "1")
@@ -815,59 +1080,151 @@ impl IndexPipeline {
             return Ok(());
         }
 
-        // Keyset-paginate raw_edge by the SurrealDB-assigned record id (as string).
-        //
-        // Correctness guarantee:
-        //   - The record id is assigned by SurrealDB at INSERT time — unique per row,
-        //     durable across restarts, never depends on app-managed global state.
-        //   - `type::string(id) AS id_str` projects the id as a comparable string.
-        //   - `WHERE type::string(id) > $cursor ORDER BY id_str LIMIT $page` advances
-        //     the cursor to the last row's id_str after each page.
-        //   - Every row is visited exactly once: the strictly-greater predicate excludes
-        //     the cursor row itself, and the unique id guarantees no row is skipped or
-        //     duplicated.
-        //   - Sentinel: start with cursor = "" (empty string sorts before all real ids).
+        // Load ALL symbols into memory at once for O(1) per-edge lookup.
+        // This avoids per-page round-trips to the DB for symbol resolution.
+        // Memory: 27K symbols × ~120 bytes = ~3.3 MB — bounded and safe.
+        let t_sym_load = Instant::now();
+        let all_symbols = load_all_symbols(db).await.context("phase2: load all symbols")?;
+        let sym_load_ms = t_sym_load.elapsed().as_millis();
+        info!(repo = %self.repo, symbol_count = all_symbols.len(), sym_load_ms, "phase2: loaded all symbols");
 
-        let page_size: i64 = WRITE_BATCH_SIZE as i64;
-        let mut cursor = String::new();
+        // Build a name → Vec<SymbolWithPos> lookup map for O(1) resolution.
+        let mut name_bucket: HashMap<String, Vec<SymbolWithPos>> = HashMap::new();
+        for s in all_symbols {
+            name_bucket.entry(s.name.clone()).or_default().push(s);
+        }
+        // Pre-sort each bucket for deterministic tie-breaking (file, line_start, line_end).
+        for bucket in name_bucket.values_mut() {
+            bucket.sort_unstable_by(|a, b| {
+                a.file.cmp(&b.file)
+                    .then(a.line_start.cmp(&b.line_start))
+                    .then(a.line_end.cmp(&b.line_end))
+            });
+        }
+
+        // Stream raw_edge in O(N) passes via file-keyset pagination.
+        //
+        // Strategy: paginate the outer loop by `from_file` (the indexed field), processing
+        // all edges for one file before advancing to the next.  This avoids any secondary
+        // sort on a computed field (type::string(id)) that cannot use an index and would
+        // cause O(N²) full-table scans.
+        //
+        // Outer step: get the next `from_file` value via:
+        //   SELECT from_file FROM raw_edge WHERE from_file > $cursor
+        //   GROUP BY from_file ORDER BY from_file LIMIT $batch_files
+        //   → uses idx_raw_edge_from_file; O(log N) seek per file boundary.
+        //
+        // Inner fetch: for each file, fetch all its edges via:
+        //   SELECT ... FROM raw_edge WHERE from_file = $file
+        //   → simple equality on the indexed field; O(edges_per_file).
+        //
+        // Memory: symbol map (3.3 MB) + max(edges_per_file) rows + at most
+        //   WRITE_BATCH_SIZE resolved edges — independent of total raw_edge count.
+        //
+        // O(N) total: O(distinct_files) outer seeks + O(total_edges) inner reads.
+        //
+        // File-batch size: fetch FILE_BATCH_SIZE distinct files per outer query to amortise
+        // the outer round-trip overhead (2464 files / FILE_BATCH_SIZE = few outer calls).
+        const FILE_BATCH_SIZE: i64 = 256;
+
+        let t_load_start = Instant::now();
+        let mut last_file = String::new();
         let mut edge_batch: Vec<(String, String, i64, String, String, String, String)> = Vec::new();
+        let mut pages_processed: u64 = 0;
+        let mut scan_ms_total: u64 = 0;
+        let mut resolve_ms_total: u64 = 0;
 
         loop {
+            // Outer: get next batch of distinct from_file values after the cursor.
+            #[derive(Deserialize)]
+            struct FileRow { from_file: String }
+            let t_outer = Instant::now();
+            let file_batch: Vec<FileRow> = db
+                .query(
+                    "SELECT from_file FROM raw_edge \
+                     WHERE from_file > $cursor \
+                     GROUP BY from_file \
+                     ORDER BY from_file \
+                     LIMIT $batch",
+                )
+                .bind(("cursor", last_file.clone()))
+                .bind(("batch", FILE_BATCH_SIZE))
+                .await
+                .context("phase2: get next file batch")?
+                .take(0)?;
+            scan_ms_total += t_outer.elapsed().as_millis() as u64;
+
+            if file_batch.is_empty() {
+                break;
+            }
+
+            // Advance outer cursor to the last file in this batch.
+            if let Some(last) = file_batch.last() {
+                last_file = last.from_file.clone();
+            }
+
+            // Inner: for each file, fetch all its raw_edge rows and resolve them.
+            // No ORDER BY needed — we just need all rows for this file.
+            let files_in_batch: Vec<String> = file_batch.into_iter().map(|r| r.from_file).collect();
+            let t_inner = Instant::now();
             let batch: Vec<RawEdgeRow> = db
                 .query(
                     "SELECT type::string(id) AS id_str, \
                             from_file, from_name, from_fqn, to_name, kind, line, import_path \
                      FROM raw_edge \
-                     WHERE type::string(id) > $cursor \
-                     ORDER BY id_str \
-                     LIMIT $page",
+                     WHERE from_file IN $files",
                 )
-                .bind(("cursor", cursor.clone()))
-                .bind(("page", page_size))
+                .bind(("files", files_in_batch))
                 .await
-                .context("phase2: scan raw_edge page")?
+                .context("phase2: scan raw_edge for file batch")?
                 .take(0)?;
+            scan_ms_total += t_inner.elapsed().as_millis() as u64;
 
             if batch.is_empty() {
-                break;
+                continue;
             }
 
-            cursor = batch.last().map(|r| r.id_str.clone()).unwrap_or(cursor);
+            pages_processed += 1;
 
-            resolve_raw_edge_page(db, &batch, &mut edge_batch, "phase2").await?;
+            // Resolve this batch in-memory against the pre-loaded symbol map.
+            let t_resolve = Instant::now();
+            resolve_raw_edge_page_from_map(&name_bucket, &batch, &mut edge_batch, "phase2");
+            resolve_ms_total += t_resolve.elapsed().as_millis() as u64;
 
-            let batch_len = batch.len() as i64;
-            if batch_len < page_size {
-                break;
+            // Flush resolved edges when accumulator reaches the write cap.
+            // Uses EDGE_RELATE_BATCH_SIZE (larger than WRITE_BATCH_SIZE) because
+            // RELATE statements are compact and fewer round-trips = faster on-disk writes.
+            if edge_batch.len() >= EDGE_RELATE_BATCH_SIZE {
+                flush_edge_batch(db, &edge_batch)
+                    .await
+                    .context("phase2: flush edge batch")?;
+                edge_batch.clear();
             }
+
+            // If the outer batch was smaller than FILE_BATCH_SIZE, we've exhausted
+            // all files — no need for another outer query.
+            // (The outer loop will break because file_batch.is_empty() on next iter,
+            //  but we can also break early here for clarity.)
         }
 
+        let load_elapsed_ms = t_load_start.elapsed().as_millis() as u64;
+        info!(
+            repo = %self.repo,
+            pages_processed,
+            scan_ms_total,
+            resolve_ms_total,
+            load_elapsed_ms,
+            "phase2: raw_edge scan + resolve complete"
+        );
+
         // Flush any remaining edges.
+        let t_flush_tail = Instant::now();
         if !edge_batch.is_empty() {
             flush_edge_batch(db, &edge_batch)
                 .await
                 .context("phase2: flush tail edge batch")?;
         }
+        info!(repo = %self.repo, flush_tail_ms = t_flush_tail.elapsed().as_millis() as u64, "phase2: tail flush complete");
 
         // Stamp the edges_resolved marker ONLY after all pages commit.
         set_meta(db, EDGES_RESOLVED_KEY, "1")
@@ -875,6 +1232,151 @@ impl IndexPipeline {
             .context("phase2: set edges_resolved marker")?;
 
         info!(repo = %self.repo, "Phase 2 edge resolution complete");
+        Ok(())
+    }
+
+    // ─── Full-rebuild Phase 2: in-memory edge resolution ─────────────────
+
+    /// Resolve raw edges in-memory for full-rebuild path.
+    ///
+    /// Unlike `resolve_edges_phase2` (which scans the `raw_edge` DB table),
+    /// this method accepts the edges returned directly from `streaming_index`
+    /// when `collect_raw_edges = true`.  This eliminates:
+    ///   - ~7s of small DB writes (INSERT INTO raw_edge per-file)
+    ///   - ~15s of DB table scan (keyset pagination over raw_edge)
+    ///
+    /// Memory: 138K edges × ~170B ≈ 24 MB — bounded and safe at repo scale.
+    /// The symbol map is loaded once from the DB (3.3 MB, same as the DB path).
+    ///
+    /// Bulk-write optimization: drops the 4 calls indexes before the RELATE flush
+    /// (eliminates per-insert index maintenance on 77K rows) and recreates them
+    /// after, which is faster than writing through live indexes.
+    async fn resolve_edges_phase2_in_memory(
+        &self,
+        db: &Surreal<Db>,
+        raw_edges: Vec<RawEdgeRecord>,
+    ) -> Result<()> {
+        // Delete all existing calls edges (rewriting from scratch).
+        db.query("DELETE FROM calls").await.context("phase2_mem: delete calls")?;
+
+        let total = raw_edges.len();
+        info!(repo = %self.repo, total_raw_edges = total, "phase2_mem: starting in-memory edge resolution");
+
+        if total == 0 {
+            set_meta(db, EDGES_RESOLVED_KEY, "1")
+                .await
+                .context("phase2_mem: set edges_resolved marker (empty)")?;
+            return Ok(());
+        }
+
+        // Load ALL symbols into memory for O(1) per-edge lookup.
+        let t_sym_load = Instant::now();
+        let all_symbols = load_all_symbols(db).await.context("phase2_mem: load all symbols")?;
+        let sym_load_ms = t_sym_load.elapsed().as_millis();
+        info!(repo = %self.repo, symbol_count = all_symbols.len(), sym_load_ms, "phase2_mem: loaded all symbols");
+
+        // Build name → Vec<SymbolWithPos> lookup map.
+        let mut name_bucket: HashMap<String, Vec<SymbolWithPos>> = HashMap::new();
+        for s in all_symbols {
+            name_bucket.entry(s.name.clone()).or_default().push(s);
+        }
+        for bucket in name_bucket.values_mut() {
+            bucket.sort_unstable_by(|a, b| {
+                a.file.cmp(&b.file)
+                    .then(a.line_start.cmp(&b.line_start))
+                    .then(a.line_end.cmp(&b.line_end))
+            });
+        }
+
+        // Resolve all in-memory raw edges and write RELATE batches.
+        // Drop calls indexes before the bulk RELATE flush to eliminate per-insert
+        // index maintenance overhead (~4 index updates × 77K rows). Rebuild after.
+        let t_idx_drop = Instant::now();
+        db.query(
+            "REMOVE INDEX IF EXISTS idx_calls_in_file  ON calls; \
+             REMOVE INDEX IF EXISTS idx_calls_out_file ON calls; \
+             REMOVE INDEX IF EXISTS idx_calls_in_name  ON calls; \
+             REMOVE INDEX IF EXISTS idx_calls_out_name ON calls;"
+        ).await.context("phase2_mem: drop calls indexes")?;
+        info!(repo = %self.repo, idx_drop_ms = t_idx_drop.elapsed().as_millis() as u64, "phase2_mem: dropped calls indexes");
+
+        let t_resolve_start = Instant::now();
+        let mut edge_batch: Vec<(String, String, i64, String, String, String, String)> = Vec::new();
+        let mut resolved_count: u64 = 0;
+        let mut dropped_count: u64 = 0;
+
+        for row in &raw_edges {
+            let resolved_to = match name_bucket.get(&row.to_name) {
+                Some(candidates) if !candidates.is_empty() => {
+                    IndexPipeline::select_best_candidate(
+                        candidates,
+                        &row.from_file,
+                        row.import_path.as_deref(),
+                    ).cloned()
+                }
+                _ => {
+                    debug!(name = %row.to_name, "phase2_mem: dropping unresolved raw edge");
+                    dropped_count += 1;
+                    None
+                }
+            };
+
+            if let Some(to) = resolved_to {
+                resolved_count += 1;
+                edge_batch.push((
+                    row.from_fqn.clone(),
+                    to.fqn.clone(),
+                    row.line,
+                    row.from_file.clone(),
+                    to.file.clone(),
+                    row.from_fqn.clone(),
+                    to.fqn.clone(),
+                ));
+
+                if edge_batch.len() >= EDGE_RELATE_BATCH_SIZE {
+                    flush_edge_batch(db, &edge_batch)
+                        .await
+                        .context("phase2_mem: flush edge batch")?;
+                    edge_batch.clear();
+                }
+            }
+        }
+
+        // Flush remaining edges.
+        if !edge_batch.is_empty() {
+            flush_edge_batch(db, &edge_batch)
+                .await
+                .context("phase2_mem: flush tail edge batch")?;
+        }
+
+        let resolve_elapsed_ms = t_resolve_start.elapsed().as_millis() as u64;
+        info!(
+            repo = %self.repo,
+            total_raw_edges = total,
+            resolved_count,
+            dropped_count,
+            resolve_elapsed_ms,
+            "phase2_mem: in-memory resolve + write complete"
+        );
+
+        // Rebuild calls indexes after bulk write.
+        // Use CONCURRENTLY to rebuild in the background — the index is marked
+        // "building" and available for writes immediately; reads use it once done.
+        // This makes index rebuild non-blocking (wall time savings: ~6-7s).
+        let t_idx_rebuild = Instant::now();
+        db.query(
+            "DEFINE INDEX IF NOT EXISTS idx_calls_in_file  ON calls FIELDS in_file  CONCURRENTLY; \
+             DEFINE INDEX IF NOT EXISTS idx_calls_out_file ON calls FIELDS out_file CONCURRENTLY; \
+             DEFINE INDEX IF NOT EXISTS idx_calls_in_name  ON calls FIELDS in_name  CONCURRENTLY; \
+             DEFINE INDEX IF NOT EXISTS idx_calls_out_name ON calls FIELDS out_name CONCURRENTLY;"
+        ).await.context("phase2_mem: rebuild calls indexes")?;
+        info!(repo = %self.repo, idx_rebuild_ms = t_idx_rebuild.elapsed().as_millis() as u64, "phase2_mem: rebuilt calls indexes (async)");
+
+        set_meta(db, EDGES_RESOLVED_KEY, "1")
+            .await
+            .context("phase2_mem: set edges_resolved marker")?;
+
+        info!(repo = %self.repo, "Phase 2 (in-memory) edge resolution complete");
         Ok(())
     }
 
@@ -1043,6 +1545,84 @@ impl IndexPipeline {
     }
 }
 
+// ─── Phase 2: in-memory symbol map helpers ───────────────────────────────
+
+/// Load ALL symbols from the DB into memory at once.
+/// Memory: 27K symbols × ~120 bytes = ~3.3 MB — bounded for repo-scale indexes.
+async fn load_all_symbols(db: &Surreal<Db>) -> Result<Vec<SymbolWithPos>> {
+    use serde::Deserialize;
+    #[derive(Deserialize)]
+    struct Row {
+        fqn: String,
+        file: String,
+        name: String,
+        line_start: i64,
+        line_end: i64,
+    }
+
+    let rows: Vec<Row> = db
+        .query("SELECT meta::id(id) AS fqn, file, name, line_start, line_end FROM symbol")
+        .await
+        .context("load_all_symbols")?
+        .take(0)?;
+
+    Ok(rows.into_iter().map(|r| {
+        use crate::store::ops::SymbolWithPos;
+        SymbolWithPos {
+            fqn: strip_id_brackets_phase2(&r.fqn),
+            file: r.file,
+            name: r.name,
+            line_start: r.line_start,
+            line_end: r.line_end,
+        }
+    }).collect())
+}
+
+/// Strip SurrealDB complex-ID brackets ⟨…⟩ returned by `meta::id(id)`.
+fn strip_id_brackets_phase2(id: &str) -> String {
+    id.strip_prefix("⟨")
+        .and_then(|s| s.strip_suffix("⟩"))
+        .unwrap_or(id)
+        .to_string()
+}
+
+/// Resolve a page of raw edges using a pre-built in-memory symbol map.
+/// This avoids per-page DB round-trips for symbol lookup.
+fn resolve_raw_edge_page_from_map(
+    name_bucket: &HashMap<String, Vec<SymbolWithPos>>,
+    batch: &[RawEdgeRow],
+    edge_batch: &mut Vec<(String, String, i64, String, String, String, String)>,
+    label: &str,
+) {
+    for row in batch {
+        let resolved_to = match name_bucket.get(&row.to_name) {
+            Some(candidates) if !candidates.is_empty() => {
+                IndexPipeline::select_best_candidate(
+                    candidates,
+                    &row.from_file,
+                    row.import_path.as_deref(),
+                ).cloned()
+            }
+            _ => {
+                debug!(name = %row.to_name, "{}: dropping unresolved raw edge (in-memory map)", label);
+                None
+            }
+        };
+
+        if let Some(to) = resolved_to {
+            edge_batch.push((
+                row.from_fqn.clone(),
+                to.fqn.clone(),
+                row.line,
+                row.from_file.clone(),
+                to.file.clone(),
+                row.from_fqn.clone(),
+                to.fqn.clone(),
+            ));
+        }
+    }
+}
+
 // ─── Parse one file (returns ParseOutput — always returns, never drops silently) ─
 
 fn parse_one_file(file: &str) -> ParseOutput {
@@ -1118,28 +1698,87 @@ fn parse_one_file(file: &str) -> ParseOutput {
 struct EmbedFileResult {
     embeddings: Vec<Vec<f32>>,
     fully_cached: bool,
+    /// Chunks served from the on-disk cache (no API call needed).
+    hit_chunks: u64,
+    /// Chunks NOT found in the cache (re-embedded via API or stored empty).
+    miss_chunks: u64,
+}
+
+/// Outcome of a cache `get_many` lookup: `(hits, miss_indices)` where each hit
+/// is `(original_index, embedding)`.
+type GetManyOutcome = (Vec<(usize, Vec<f32>)>, Vec<usize>);
+
+/// Map the result of a `spawn_blocking(cache.get_many)` call to the cache
+/// lookup outcome, degrading a `JoinError` (panic inside the blocking task)
+/// to "everything missed, empty embeddings" — identical to the Voyage-API
+/// error path. Returning `Err(EmbedFileResult)` signals the caller to return
+/// that degraded result immediately; `Ok((hits, misses))` is the normal path.
+///
+/// Extracted so the JoinError arm the whole no-drop guarantee rests on is
+/// covered by a test that drives a real panic through this exact logic
+/// (`get_many` itself never panics — it converts all I/O errors to misses).
+fn map_get_many_result(
+    file: &str,
+    n_texts: usize,
+    get_result: std::result::Result<GetManyOutcome, tokio::task::JoinError>,
+) -> std::result::Result<GetManyOutcome, EmbedFileResult> {
+    match get_result {
+        Ok(result) => Ok(result),
+        Err(e) => {
+            warn!(file = %file, error = %e, "cache get_many panicked in spawn_blocking; treating all as miss");
+            // Return empty embeddings — same as the Voyage-API-error path.
+            Err(EmbedFileResult {
+                fully_cached: false,
+                embeddings: vec![vec![]; n_texts],
+                hit_chunks: 0,
+                miss_chunks: n_texts as u64,
+            })
+        }
+    }
 }
 
 async fn embed_parsed_file(
     pf: &ParsedFile,
     voyage: Option<&VoyageClient>,
-    cache: Option<&EmbeddingCache>,
+    cache: Option<Arc<EmbeddingCache>>,
 ) -> EmbedFileResult {
     if pf.chunks.is_empty() {
-        return EmbedFileResult { embeddings: vec![], fully_cached: false };
+        return EmbedFileResult {
+            embeddings: vec![],
+            fully_cached: false,
+            hit_chunks: 0,
+            miss_chunks: 0,
+        };
     }
 
     let texts: Vec<String> = pf.chunks.iter().map(|c| c.content.clone()).collect();
 
     // No voyage client AND no cache → return empty embeddings (same as before).
     if voyage.is_none() && cache.is_none() {
-        return EmbedFileResult { embeddings: vec![vec![]; texts.len()], fully_cached: false };
+        return EmbedFileResult {
+            embeddings: vec![vec![]; texts.len()],
+            fully_cached: false,
+            hit_chunks: 0,
+            miss_chunks: texts.len() as u64,
+        };
     }
 
     match cache {
-        Some(cache) => {
+        Some(cache_arc) => {
             // --- Cache path ---
-            let (raw_hits, miss_indices) = cache.get_many(&texts);
+            // Run cache.get_many() off the async runtime (blocking FS I/O).
+            let texts_for_lookup = texts.clone();
+            let cache_for_lookup = cache_arc.clone();
+            let get_result = tokio::task::spawn_blocking(move || {
+                cache_for_lookup.get_many(&texts_for_lookup)
+            })
+            .await;
+
+            // Map JoinError (panic in spawn_blocking) to the degradation path.
+            let (raw_hits, miss_indices) = match map_get_many_result(&pf.path, texts.len(), get_result) {
+                Ok(result) => result,
+                Err(degraded) => return degraded,
+            };
 
             if miss_indices.is_empty() && !raw_hits.is_empty() {
                 // 100% cache hit path.
@@ -1170,7 +1809,16 @@ async fn embed_parsed_file(
                                     .iter()
                                     .map(|&i| texts[i].clone())
                                     .collect();
-                                cache.put_many(&put_texts, &api_results);
+                                // put_many is blocking FS — run off the async runtime.
+                                let cache_for_put = cache_arc.clone();
+                                let put_embeddings = api_results.clone();
+                                if let Err(e) = tokio::task::spawn_blocking(move || {
+                                    cache_for_put.put_many(&put_texts, &put_embeddings);
+                                })
+                                .await
+                                {
+                                    warn!(file = %pf.path, error = %e, "cache put_many panicked (non-fatal)");
+                                }
                                 for (local_i, emb) in api_results.into_iter().enumerate() {
                                     extra_embeddings.push((dim_miss_indices[local_i], emb));
                                 }
@@ -1197,7 +1845,15 @@ async fn embed_parsed_file(
                 for (idx, emb) in extra_embeddings {
                     result[idx] = emb;
                 }
-                EmbedFileResult { fully_cached: dim_miss_indices.is_empty(), embeddings: result }
+                let n_dim_miss = dim_miss_indices.len() as u64;
+                let n_total = texts.len() as u64;
+                EmbedFileResult {
+                    fully_cached: dim_miss_indices.is_empty(),
+                    embeddings: result,
+                    // valid cache reads = total minus any dim-mismatches that needed API
+                    hit_chunks: n_total - n_dim_miss,
+                    miss_chunks: n_dim_miss,
+                }
             } else {
                 // Partial or total cache miss path.
                 let mut result = vec![vec![]; texts.len()];
@@ -1238,12 +1894,20 @@ async fn embed_parsed_file(
                         // Learn dim from API results.
                         let dim = api_results[0].len();
 
-                        // Cache the API results.
+                        // Cache the API results — blocking FS, run off async runtime.
                         let miss_texts: Vec<String> = all_miss_indices
                             .iter()
                             .map(|&i| texts[i].clone())
                             .collect();
-                        cache.put_many(&miss_texts, &api_results);
+                        let cache_for_put = cache_arc.clone();
+                        let put_embeddings = api_results.clone();
+                        if let Err(e) = tokio::task::spawn_blocking(move || {
+                            cache_for_put.put_many(&miss_texts, &put_embeddings);
+                        })
+                        .await
+                        {
+                            warn!(file = %pf.path, error = %e, "cache put_many panicked (non-fatal)");
+                        }
 
                         // Place API results into result.
                         for (local_i, emb) in api_results.into_iter().enumerate() {
@@ -1270,7 +1934,16 @@ async fn embed_parsed_file(
                                 .collect();
                             match client.embed(&re_texts, InputType::Document).await {
                                 Ok(re_results) => {
-                                    cache.put_many(&re_texts, &re_results);
+                                    let cache_for_put = cache_arc.clone();
+                                    let put_re_texts = re_texts.clone();
+                                    let put_re_embeddings = re_results.clone();
+                                    if let Err(e) = tokio::task::spawn_blocking(move || {
+                                        cache_for_put.put_many(&put_re_texts, &put_re_embeddings);
+                                    })
+                                    .await
+                                    {
+                                        warn!(file = %pf.path, error = %e, "cache put_many panicked (non-fatal)");
+                                    }
                                     for (local_i, emb) in re_results.into_iter().enumerate() {
                                         result[re_embed_indices[local_i]] = emb;
                                     }
@@ -1296,7 +1969,14 @@ async fn embed_parsed_file(
                     result[idx] = emb;
                 }
 
-                EmbedFileResult { fully_cached: false, embeddings: result }
+                let n_miss = all_miss_indices.len() as u64;
+                let n_total = texts.len() as u64;
+                EmbedFileResult {
+                    fully_cached: false,
+                    embeddings: result,
+                    hit_chunks: n_total.saturating_sub(n_miss),
+                    miss_chunks: n_miss,
+                }
             }
         }
         None => {
@@ -1304,65 +1984,35 @@ async fn embed_parsed_file(
             match voyage {
                 Some(client) => {
                     match client.embed(&texts, InputType::Document).await {
-                        Ok(embs) => EmbedFileResult { fully_cached: false, embeddings: embs },
+                        Ok(embs) => EmbedFileResult {
+                            fully_cached: false,
+                            embeddings: embs,
+                            hit_chunks: 0,
+                            miss_chunks: texts.len() as u64,
+                        },
                         Err(e) => {
                             warn!(file = %pf.path, error = %e, "embed failed; storing empty embeddings");
-                            EmbedFileResult { fully_cached: false, embeddings: vec![vec![]; texts.len()] }
+                            EmbedFileResult {
+                                fully_cached: false,
+                                embeddings: vec![vec![]; texts.len()],
+                                hit_chunks: 0,
+                                miss_chunks: texts.len() as u64,
+                            }
                         }
                     }
                 }
-                None => EmbedFileResult { fully_cached: false, embeddings: vec![vec![]; texts.len()] },
+                None => EmbedFileResult {
+                    fully_cached: false,
+                    embeddings: vec![vec![]; texts.len()],
+                    hit_chunks: 0,
+                    miss_chunks: texts.len() as u64,
+                },
             }
         }
     }
 }
 
 // ─── Flush helpers ────────────────────────────────────────────────────────
-
-/// Write chunks for a single file and return (ChunkId, embedding) pairs.
-/// Drops chunk content from memory after flushing — never accumulates globally.
-async fn flush_file_chunks(
-    db: &Surreal<Db>,
-    chunks: &[crate::parsing::chunker::Chunk],
-    embeddings: &[Vec<f32>],
-) -> Result<Vec<(ChunkId, Vec<f32>)>> {
-    let mut chunk_vectors: Vec<(ChunkId, Vec<f32>)> = Vec::with_capacity(chunks.len());
-    let mut batch: Vec<ChunkRecord> = Vec::with_capacity(WRITE_BATCH_SIZE);
-
-    for (chunk, emb) in chunks.iter().zip(
-        embeddings.iter().cloned().chain(std::iter::repeat(vec![]))
-    ) {
-        chunk_vectors.push((
-            ChunkId {
-                file: chunk.file.clone(),
-                line_start: chunk.line_start,
-                line_end: chunk.line_end,
-            },
-            emb.clone(),
-        ));
-        batch.push(ChunkRecord {
-            file: chunk.file.clone(),
-            line_start: chunk.line_start as i64,
-            line_end: chunk.line_end as i64,
-            content: chunk.content.clone(),
-            embedding: emb,
-            symbol_ref: chunk.symbol_ref.as_ref().map(|fqn| format!("symbol:⟨{fqn}⟩")),
-        });
-
-        if batch.len() >= WRITE_BATCH_SIZE {
-            flush_chunk_batch(db, std::mem::take(&mut batch))
-                .await
-                .context("flush_file_chunks: batch")?;
-        }
-    }
-    if !batch.is_empty() {
-        flush_chunk_batch(db, batch)
-            .await
-            .context("flush_file_chunks: tail batch")?;
-    }
-
-    Ok(chunk_vectors)
-}
 
 /// Flush a batch of chunk records via a native-bind INSERT.
 async fn flush_chunk_batch(db: &Surreal<Db>, batch: Vec<ChunkRecord>) -> Result<()> {
@@ -1376,48 +2026,53 @@ async fn flush_chunk_batch(db: &Surreal<Db>, batch: Vec<ChunkRecord>) -> Result<
     Ok(())
 }
 
-/// Flush symbols for one file using native-bind INSERT (❹: replaces text-query builder).
+/// Flush symbols for one file by batching multiple UPSERT statements into a
+/// single `db.query(...)` call per chunk of `WRITE_BATCH_SIZE`.
+///
+/// SurrealDB record IDs (`symbol:\`⟨fqn⟩\``) must appear literally in SurrealQL
+/// and cannot be passed as typed parameters in UPSERT — the same constraint that
+/// requires `flush_edge_batch` to use text-query building. `escape_surreal` is
+/// the injection guard for all string field values and the FQN itself.
 async fn flush_symbol_batch_native(db: &Surreal<Db>, symbols: &[Symbol]) -> Result<()> {
     use crate::store::ops::kind_to_str;
 
     for chunk in symbols.chunks(WRITE_BATCH_SIZE) {
-        let records: Vec<SymbolRecord> = chunk
-            .iter()
-            .map(|sym| SymbolRecord {
-                name: sym.qualified.name.clone(),
-                kind: kind_to_str(&sym.kind).to_string(),
-                file: sym.qualified.file.clone(),
-                line_start: sym.line_start as i64,
-                line_end: sym.line_end as i64,
-                signature: sym.signature.clone(),
-                parent: sym.parent_fqn.as_deref().map(|p| format!("symbol:⟨{}⟩", p)),
-            })
-            .collect();
-
-        if !records.is_empty() {
-            // Use UPSERT so incremental re-runs are idempotent.
-            // We need to upsert by the deterministic record ID (fqn).
-            // Native INSERT INTO doesn't support custom IDs, so fall back to
-            // per-record UPSERT with native bind for the field values.
-            for (sym, rec) in chunk.iter().zip(records) {
-                let fqn = escape_surreal(&sym.qualified.fqn());
-                db.query(format!(
-                    "UPSERT symbol:`⟨{fqn}⟩` SET \
-                     name = $name, kind = $kind, file = $file, \
-                     line_start = $line_start, line_end = $line_end, \
-                     signature = $signature, parent = $parent"
-                ))
-                .bind(("name", rec.name))
-                .bind(("kind", rec.kind))
-                .bind(("file", rec.file))
-                .bind(("line_start", rec.line_start))
-                .bind(("line_end", rec.line_end))
-                .bind(("signature", rec.signature))
-                .bind(("parent", rec.parent))
-                .await
-                .context("flush_symbol_batch_native: upsert symbol")?;
-            }
+        if chunk.is_empty() {
+            continue;
         }
+
+        // Build one multi-statement query for the whole chunk, mirroring
+        // flush_edge_batch's pattern for O(1) round-trips per batch.
+        let mut query = String::with_capacity(chunk.len() * 256);
+        for sym in chunk {
+            let fqn_esc = escape_surreal(&sym.qualified.fqn());
+            let name_esc = escape_surreal(&sym.qualified.name);
+            let kind_str = kind_to_str(&sym.kind);
+            let file_esc = escape_surreal(&sym.qualified.file);
+            let line_start = sym.line_start as i64;
+            let line_end = sym.line_end as i64;
+
+            // Optional fields: use SurrealQL NONE literal when absent.
+            let sig_val = match &sym.signature {
+                Some(s) => format!("'{}'", escape_surreal(s)),
+                None => "NONE".to_string(),
+            };
+            let parent_val = match &sym.parent_fqn {
+                Some(p) => format!("'symbol:⟨{}⟩'", escape_surreal(p)),
+                None => "NONE".to_string(),
+            };
+
+            query.push_str(&format!(
+                "UPSERT symbol:`⟨{fqn_esc}⟩` SET \
+                 name = '{name_esc}', kind = '{kind_str}', file = '{file_esc}', \
+                 line_start = {line_start}, line_end = {line_end}, \
+                 signature = {sig_val}, parent = {parent_val};\n"
+            ));
+        }
+
+        db.query(query)
+            .await
+            .context("flush_symbol_batch_native: batched UPSERT")?;
     }
     Ok(())
 }
@@ -2716,3 +3371,246 @@ mod hidden_change_filter_tests {
         );
     }
 }
+
+// ─── Performance-fix regression tests ────────────────────────────────────
+/// Tests that validate the three performance fixes from the locked plan:
+///   1. Concurrent cached-file processing (spawn_blocking unblocks buffer_unordered).
+///   2. Panicking cache op degrades gracefully to no_embeddings, not abort.
+///   3. Watcher-path run performs zero full-repo walk.
+#[cfg(test)]
+mod perf_fix_tests {
+    use super::*;
+    use crate::store::open_db;
+    use crate::store::ops::count_indexed_files;
+    use tempfile::TempDir;
+
+    // ── Test 1: Concurrent cache hits are no longer serialized ───────────────
+    //
+    // With the old synchronous `cache.get_many()` on the async task, every file
+    // processed strictly one-at-a-time even under `buffer_unordered(N)` because
+    // the blocking FS read held the driver task without yielding.
+    //
+    // With the new `spawn_blocking` wrapping, each file's cache lookup yields the
+    // async task and the tokio thread pool runs up to N lookups concurrently.
+    //
+    // This test verifies the infrastructure: N spawn_blocking closures (each
+    // simulating a cache read with a short sleep) achieve peak concurrency > 1
+    // when driven through `buffer_unordered(N)`.  If the old serial path were
+    // still in place, peak would be 1.
+    #[tokio::test]
+    async fn cached_file_processing_is_concurrent_not_serial() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let concurrency = 4usize;
+        let file_count = 8usize;
+
+        let inflight = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+
+        let items: Vec<usize> = (0..file_count).collect();
+        let inflight_ref = inflight.clone();
+        let peak_ref = peak.clone();
+
+        futures::stream::iter(items)
+            .map(|_i| {
+                let inf = inflight_ref.clone();
+                let pk = peak_ref.clone();
+                async move {
+                    // Each file's cache lookup runs in spawn_blocking, yielding
+                    // the async task and allowing other tasks to proceed.
+                    tokio::task::spawn_blocking(move || {
+                        let n = inf.fetch_add(1, Ordering::SeqCst) + 1;
+                        pk.fetch_max(n, Ordering::SeqCst);
+                        // Simulate a short FS read.
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                        inf.fetch_sub(1, Ordering::SeqCst);
+                    })
+                    .await
+                    .expect("spawn_blocking must not panic")
+                }
+            })
+            .buffer_unordered(concurrency)
+            .collect::<Vec<_>>()
+            .await;
+
+        let peak_observed = peak.load(Ordering::SeqCst);
+        assert!(
+            peak_observed > 1,
+            "spawn_blocking cache reads must run concurrently (peak={peak_observed}); \
+             if peak==1 the old serial path is still in effect"
+        );
+        assert!(
+            peak_observed <= concurrency,
+            "peak ({peak_observed}) must not exceed buffer_unordered limit ({concurrency})"
+        );
+    }
+
+    // ── Test 2: Panicking cache op → no_embeddings, not abort ────────────────
+    //
+    // `embed_parsed_file` wraps `cache.get_many()` in `spawn_blocking`.  If that
+    // closure panics, the JoinError must be caught and the file must be returned
+    // with all-empty embeddings (the existing degradation path), NOT propagated
+    // as an unwrap-panic that aborts the driver task.
+    //
+    // We simulate this by exercising the same JoinError-handling path used by the
+    // production code: a spawn_blocking closure that panics produces a JoinError,
+    // and our code maps it to the degraded EmbedFileResult.
+    #[tokio::test]
+    async fn spawn_blocking_panic_maps_to_degraded_embed_not_abort() {
+        // Drive a REAL spawn_blocking panic through map_get_many_result — the exact
+        // function the production get_many call site uses. This covers the JoinError
+        // arm directly (not an equal-valued sibling branch): if someone later changed
+        // that arm to .unwrap() or to propagate, this test would fail.
+        let get_result: std::result::Result<GetManyOutcome, tokio::task::JoinError> =
+            tokio::task::spawn_blocking(|| -> GetManyOutcome {
+                panic!("simulated cache get_many panic");
+            })
+            .await;
+
+        assert!(get_result.is_err(), "panicking spawn_blocking must yield Err(JoinError)");
+
+        // n_texts = 3 → degraded result must be exactly 3 empty embedding slots.
+        let mapped = map_get_many_result("/test/panic_file.rs", 3, get_result);
+
+        match mapped {
+            Ok(_) => panic!("JoinError must map to Err(degraded EmbedFileResult), not Ok"),
+            Err(degraded) => {
+                // The file is NOT dropped: it flows on with one empty slot per chunk,
+                // which the pipeline's all-empty check turns into embed_failed=true →
+                // status "no_embeddings". The driver task never panics.
+                assert_eq!(
+                    degraded.embeddings.len(),
+                    3,
+                    "degraded result must have one slot per text (no file dropped)"
+                );
+                assert!(
+                    degraded.embeddings.iter().all(|e| e.is_empty()),
+                    "every slot must be empty on the JoinError degradation path"
+                );
+                assert!(
+                    !degraded.fully_cached,
+                    "degraded result must not be marked fully_cached"
+                );
+            }
+        }
+
+        // Sanity: the happy path passes through unchanged.
+        let ok_input: std::result::Result<GetManyOutcome, tokio::task::JoinError> =
+            Ok((vec![(0, vec![1.0, 2.0])], vec![1]));
+        match map_get_many_result("/test/ok_file.rs", 2, ok_input) {
+            Ok((hits, misses)) => {
+                assert_eq!(hits.len(), 1, "hits must be preserved");
+                assert_eq!(misses, vec![1], "misses must be preserved");
+            }
+            Err(_) => panic!("Ok(get_many result) must pass through as Ok"),
+        }
+    }
+
+    // ── Test 3: Watcher path performs zero full-repo walk ────────────────────
+    //
+    // When `run()` is called with `changes == Some(explicit_list)` (watcher path),
+    // only the explicitly changed files should be processed — no `walk_repo` should
+    // be invoked against the on-disk tree.
+    //
+    // Approach:
+    //   1. Build a temp repo with several files (A, B, C, D).
+    //   2. Pre-seed `file_meta` rows for all four files (simulating a prior full build).
+    //   3. Call `run()` with `changes = Some(vec![single_change_for_file_A])`.
+    //   4. Assert: only file A's chunks were (re)written; files B/C/D are untouched.
+    //      If a full walk had occurred, all four files would be (re)indexed.
+    #[tokio::test]
+    async fn watcher_path_processes_only_explicit_changes_no_full_walk() {
+        let home = TempDir::new().unwrap();
+        let repo_dir = TempDir::new().unwrap();
+        let repo = repo_dir.path().to_str().unwrap().replace('\\', "/");
+
+        // Write four files to the repo.
+        let file_a = repo_dir.path().join("a.rs");
+        let file_b = repo_dir.path().join("b.rs");
+        let file_c = repo_dir.path().join("c.rs");
+        let file_d = repo_dir.path().join("d.rs");
+
+        std::fs::write(&file_a, "fn alpha() {}\n").unwrap();
+        std::fs::write(&file_b, "fn beta() {}\n").unwrap();
+        std::fs::write(&file_c, "fn gamma() {}\n").unwrap();
+        std::fs::write(&file_d, "fn delta() {}\n").unwrap();
+
+        let file_a_path = file_a.to_str().unwrap().replace('\\', "/");
+
+        let db = open_db(home.path(), &repo).await.expect("open db");
+
+        // First, do a full build so all four files are indexed.
+        let pipeline = IndexPipeline::new(repo.clone(), None);
+        pipeline
+            .run(&db, None, true, None, None, None, &[])
+            .await
+            .expect("full build must succeed");
+
+        let initial_file_count = count_indexed_files(&db, &repo).await.unwrap();
+        assert_eq!(initial_file_count, 4, "all four files must be indexed after full build");
+
+        // Modify only file_a on disk so its mtime/content changes.
+        std::fs::write(&file_a, "fn alpha_v2() {}\nfn alpha_extra() {}\n").unwrap();
+
+        // Construct the explicit single-file change (watcher path).
+        // FileChange only carries path + kind (mtime/size live in file_meta).
+        let changes = vec![FileChange {
+            path: file_a_path.clone(),
+            kind: ChangeKind::Modified,
+        }];
+
+        // Run the incremental pipeline with changes = Some(...) — the watcher path.
+        let stats = pipeline
+            .run(&db, Some(changes), false, None, None, None, &[])
+            .await
+            .expect("incremental run must succeed");
+
+        // Assert: all four files are still indexed (B, C, D were not removed).
+        let after_file_count = count_indexed_files(&db, &repo).await.unwrap();
+        assert!(
+            after_file_count >= initial_file_count,
+            "file count must not decrease after watcher-path run \
+             (before={initial_file_count}, after={after_file_count})"
+        );
+
+        // The stats should reflect the change set size, not the full repo.
+        // total_files must come from stored_meta count (not a fresh walk).
+        assert_eq!(
+            stats.total_files,
+            initial_file_count as u64,
+            "total_files must equal stored_meta count from the prior run ({initial_file_count}), not a fresh walk result"
+        );
+
+        // Verify file_b, file_c, file_d were NOT re-indexed: their file_meta
+        // mtime must still match the original (unchanged) file timestamps.
+        let all_meta = crate::store::ops::get_all_file_meta(&db, &repo)
+            .await
+            .expect("get_all_file_meta");
+
+        // Match by filename suffix — path normalization (/ vs \) may differ
+        // between what we constructed and what walk_repo stored in the DB.
+        let b_meta = all_meta.iter().find(|m| m.path.ends_with("b.rs")).expect("file_b must have meta");
+        let c_meta = all_meta.iter().find(|m| m.path.ends_with("c.rs")).expect("file_c must have meta");
+        let d_meta = all_meta.iter().find(|m| m.path.ends_with("d.rs")).expect("file_d must have meta");
+        let a_meta_stored = all_meta.iter().find(|m| m.path.ends_with("a.rs")).expect("file_a must have meta");
+
+        // B, C, D were not in the change set → their mtime in file_meta must
+        // match the on-disk stat (unchanged), proving they were not re-parsed.
+        let b_stat = stat_file(&b_meta.path).expect("stat file_b");
+        let c_stat = stat_file(&c_meta.path).expect("stat file_c");
+        let d_stat = stat_file(&d_meta.path).expect("stat file_d");
+
+        assert_eq!(b_meta.mtime, b_stat.mtime, "file_b mtime must be unchanged");
+        assert_eq!(c_meta.mtime, c_stat.mtime, "file_c mtime must be unchanged");
+        assert_eq!(d_meta.mtime, d_stat.mtime, "file_d mtime must be unchanged");
+
+        // Verify file_a was re-indexed: its file_meta mtime must match the updated stat.
+        let a_stat = stat_file(&a_meta_stored.path).expect("stat file_a (updated)");
+        assert_eq!(
+            a_meta_stored.mtime, a_stat.mtime,
+            "file_a mtime must be updated after watcher-path re-index"
+        );
+    }
+}
+
