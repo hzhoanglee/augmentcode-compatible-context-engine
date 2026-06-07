@@ -1,0 +1,10 @@
+{
+  "name": "vibervn-context-engine-darwin-arm64",
+  "version": "0.0.0",
+  "description": "vibervn-context-engine binary for macOS arm64",
+  "license": "MIT",
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "files": ["bin"],
+  "engines": { "node": ">=18" }
+}

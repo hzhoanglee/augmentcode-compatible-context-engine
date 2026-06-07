@@ -1,0 +1,10 @@
+{
+  "name": "vibervn-context-engine-win32-x64",
+  "version": "0.0.0",
+  "description": "vibervn-context-engine binary for Windows x64",
+  "license": "MIT",
+  "os": ["win32"],
+  "cpu": ["x64"],
+  "files": ["bin"],
+  "engines": { "node": ">=18" }
+}

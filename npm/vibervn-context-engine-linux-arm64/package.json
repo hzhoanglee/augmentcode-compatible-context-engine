@@ -1,0 +1,10 @@
+{
+  "name": "vibervn-context-engine-linux-arm64",
+  "version": "0.0.0",
+  "description": "vibervn-context-engine binary for Linux arm64",
+  "license": "MIT",
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "files": ["bin"],
+  "engines": { "node": ">=18" }
+}
