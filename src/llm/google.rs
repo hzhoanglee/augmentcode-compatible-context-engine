@@ -28,6 +28,8 @@ struct Part {
 #[derive(Serialize)]
 struct GenerationConfig {
     temperature: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_mime_type: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -63,6 +65,7 @@ pub async fn complete(
     system: &str,
     user: &str,
     temperature: f32,
+    structured: bool,
 ) -> Result<String> {
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
@@ -77,7 +80,10 @@ pub async fn complete(
             role: "user".to_owned(),
             parts: vec![Part { text: user.to_owned() }],
         }],
-        generation_config: GenerationConfig { temperature },
+        generation_config: GenerationConfig {
+            temperature,
+            response_mime_type: structured.then(|| "application/json".to_owned()),
+        },
     };
 
     let resp = http

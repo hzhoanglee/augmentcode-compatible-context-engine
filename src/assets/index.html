@@ -248,6 +248,17 @@
             Chunks smaller than this many lines are returned whole; larger ones may be narrowed to relevant line ranges.
           </p>
         </div>
+        <div class="mb-4">
+          <label class="flex items-center gap-2 text-xs font-medium text-gray-500 dark:text-wiki-text-muted cursor-pointer">
+            <input id="llm-use-structured-output" type="checkbox"
+                   class="h-4 w-4 rounded border-gray-300 dark:border-wiki-border text-blue-600
+                          focus:outline-none focus:ring-2 focus:ring-blue-400" />
+            Use structured output
+          </label>
+          <p class="mt-1 text-xs text-gray-400 dark:text-wiki-text-muted">
+            Request the provider's native JSON output for reranking instead of XML tags. Providers without a JSON mode fall back to the XML path automatically.
+          </p>
+        </div>
         <div class="mb-2">
           <label class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1">API keys</label>
           <div id="llm-keys-list" class="space-y-2 mb-2"></div>
@@ -929,6 +940,7 @@ function renderAll() {
   document.getElementById('llm-provider').value = cfg.llm.provider || 'google';
   document.getElementById('llm-rerank-model').value = cfg.llm.rerank_model || '';
   document.getElementById('llm-min-prune-lines').value = cfg.llm.rerank_min_prune_lines ?? 16;
+  document.getElementById('llm-use-structured-output').checked = cfg.llm.use_structured_output ?? true;
   renderKeyList('llm-keys-list', cfg.llm.api_keys, (idx) => {
     cfg.llm.api_keys.splice(idx, 1);
     renderAll();
@@ -1067,6 +1079,9 @@ document.getElementById('llm-min-prune-lines').addEventListener('input', (e) => 
   const n = parseInt(e.target.value, 10);
   cfg.llm.rerank_min_prune_lines = (Number.isInteger(n) && n >= 0) ? n : 16;
   saveDebounced();
+});
+document.getElementById('llm-use-structured-output').addEventListener('change', (e) => {
+  if (cfg) { cfg.llm.use_structured_output = e.target.checked; saveNow(); }
 });
 document.getElementById('embedding-provider').addEventListener('change', (e) => {
   if (cfg) { cfg.embedding.provider = e.target.value; saveNow(); }

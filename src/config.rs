@@ -66,6 +66,14 @@ fn default_min_prune_lines() -> u32 {
     16
 }
 
+fn default_use_structured_output() -> bool {
+    // When true, the reranker requests the provider's native JSON output mode
+    // (Gemini responseMimeType / OpenAI response_format) instead of wrapping the
+    // ranking in <ranked_indices> XML tags. Providers without a JSON mode fall
+    // back to the XML path regardless of this flag.
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LlmConfig {
     pub provider: String,
@@ -75,6 +83,11 @@ pub struct LlmConfig {
     /// Chunks smaller than this are returned whole. Defaults to 16.
     #[serde(default = "default_min_prune_lines")]
     pub rerank_min_prune_lines: u32,
+    /// Use the provider's native JSON output mode for reranking instead of XML
+    /// tag wrapping. Only honored for providers that support it (google, openai);
+    /// others fall back to the XML path with a warning. Defaults to true.
+    #[serde(default = "default_use_structured_output")]
+    pub use_structured_output: bool,
 }
 
 impl Default for LlmConfig {
@@ -84,6 +97,7 @@ impl Default for LlmConfig {
             rerank_model: "gemini-3.1-flash-lite".to_owned(),
             api_keys: Vec::new(),
             rerank_min_prune_lines: default_min_prune_lines(),
+            use_structured_output: default_use_structured_output(),
         }
     }
 }
