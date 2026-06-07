@@ -422,7 +422,7 @@ async fn fetch_chunk_content(
 
 /// Read lines [line_start, line_end] (1-based, inclusive) from the filesystem.
 /// Returns formatted numbered lines: "10: fn main() {\n11: ..."
-fn read_lines_from_fs(file: &str, line_start: u32, line_end: u32) -> Result<String> {
+pub(crate) fn read_lines_from_fs(file: &str, line_start: u32, line_end: u32) -> Result<String> {
     let content = std::fs::read_to_string(file)?;
     let lines: Vec<&str> = content.lines().collect();
     let start_idx = (line_start.saturating_sub(1)) as usize;
@@ -442,7 +442,7 @@ fn read_lines_from_fs(file: &str, line_start: u32, line_end: u32) -> Result<Stri
 /// Slice an already-numbered chunk text (produced by `read_lines_from_fs`,
 /// first line == `chunk_start`) down to the absolute line range [s, e].
 /// Both bounds are 1-based inclusive and assumed already clamped to the chunk.
-fn slice_numbered(numbered: &str, chunk_start: u32, s: u32, e: u32) -> String {
+pub(crate) fn slice_numbered(numbered: &str, chunk_start: u32, s: u32, e: u32) -> String {
     let lines: Vec<&str> = numbered.lines().collect();
     let from = s.saturating_sub(chunk_start) as usize;
     let to = (e.saturating_sub(chunk_start) as usize + 1).min(lines.len());

@@ -687,27 +687,95 @@ pub async fn run_file_retrieval(
 
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
-    let top_k = top_k.min(scored.len());
-    let selected = &scored[..top_k];
+    // Widen candidate pool for the reranker (top_k * 4), then let LLM narrow.
+    let candidate_count = (top_k * 4).min(scored.len());
+    let candidates = &scored[..candidate_count];
 
-    // Format output identical to codebase-retrieval: path#Lstart-end\n<numbered lines>
+    // Convert to MergeChunk for reranker compatibility.
+    let merge_chunks: Vec<crate::query::merger::MergeChunk> = candidates
+        .iter()
+        .map(|(score, c)| crate::query::merger::MergeChunk {
+            file: db_key.clone(),
+            line_start: c.line_start,
+            line_end: c.line_end,
+            score: *score,
+            content: c.content.clone(),
+            symbol: None,
+            symbol_fqn: None,
+        })
+        .collect();
+
+    // Read numbered content from disk for accurate reranker input.
+    let numbered: Vec<Option<String>> = merge_chunks
+        .iter()
+        .map(|c| crate::query::engine::read_lines_from_fs(&c.file, c.line_start, c.line_end).ok())
+        .collect();
+
+    let caller_stats: Vec<Option<(u32, u32)>> = vec![None; merge_chunks.len()];
+
+    // Rerank via LLM (degrades gracefully to cosine order if no keys).
+    let llm_client = LlmClient::new(&settings.llm);
+    let rerank_output = crate::query::reranker::rerank(
+        information_request,
+        &merge_chunks,
+        &numbered,
+        &caller_stats,
+        settings.llm.rerank_min_prune_lines,
+        llm_client.as_ref(),
+    )
+    .await;
+
+    // Cap to requested top_k after reranking.
+    let final_count = top_k.min(rerank_output.reranked_indices.len());
     let display_path = &db_key;
     let mut out = String::new();
-    for (_, chunk) in selected {
-        if !out.is_empty() {
-            out.push_str("\n\n");
+
+    for k in 0..final_count {
+        let idx = rerank_output.reranked_indices[k];
+        let Some(chunk) = merge_chunks.get(idx) else { continue };
+        let numbered_text = numbered.get(idx).and_then(|n| n.as_deref());
+        let selection = rerank_output.line_selections.get(k).and_then(|s| s.as_ref());
+
+        match (numbered_text, selection) {
+            (Some(text), Some(ranges)) if !ranges.is_empty() => {
+                for &(s, e) in ranges {
+                    if !out.is_empty() {
+                        out.push_str("\n\n");
+                    }
+                    let sliced = crate::query::engine::slice_numbered(text, chunk.line_start, s, e);
+                    out.push_str(&format!("{}#L{}-{}\n{}", display_path, s, e, sliced));
+                }
+            }
+            (Some(text), _) => {
+                if !out.is_empty() {
+                    out.push_str("\n\n");
+                }
+                out.push_str(&format!(
+                    "{}#L{}-{}\n{}",
+                    display_path, chunk.line_start, chunk.line_end, text
+                ));
+            }
+            (None, _) => {
+                if !out.is_empty() {
+                    out.push_str("\n\n");
+                }
+                let fallback = chunk
+                    .content
+                    .lines()
+                    .enumerate()
+                    .map(|(i, line)| format!("{}: {}", chunk.line_start + i as u32, line))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                out.push_str(&format!(
+                    "{}#L{}-{}\n{}",
+                    display_path, chunk.line_start, chunk.line_end, fallback
+                ));
+            }
         }
-        let numbered = chunk
-            .content
-            .lines()
-            .enumerate()
-            .map(|(i, line)| format!("{}: {}", chunk.line_start + i as u32, line))
-            .collect::<Vec<_>>()
-            .join("\n");
-        out.push_str(&format!(
-            "{}#L{}-{}\n{}",
-            display_path, chunk.line_start, chunk.line_end, numbered
-        ));
+    }
+
+    if out.is_empty() {
+        out.push_str(&format!("No relevant chunks found for query in file: {file_path}"));
     }
 
     out.push_str(
