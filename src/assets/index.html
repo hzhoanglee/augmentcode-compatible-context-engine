@@ -705,6 +705,16 @@ let currentLang = 'en';
 const LANGS = ['en', 'vi', 'zh'];
 const LANG_NAMES = { en: 'English', vi: 'Tiếng Việt', zh: '中文' };
 
+// OS-aware example repo path for placeholders — concrete beats abstract.
+// Windows → drive-letter path; everything else → POSIX home path.
+function isWindowsOS() {
+  const p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || navigator.userAgent || '';
+  return /win/i.test(p);
+}
+function exampleRepoPath() {
+  return isWindowsOS() ? 'D:\\projects\\my-app' : '~/projects/my-app';
+}
+
 // Hand-built inline SVG flags (no emoji — Windows renders flag emoji as letter
 // codes; no icon library per DNA). 3:2 viewBox, filling a rounded clip.
 function starPts(cx, cy, r, rot) {
@@ -745,13 +755,14 @@ function t(key, params) {
 
 // Apply translations to every tagged static node, the title, and <html lang>.
 function applyI18n() {
+  const params = { path: exampleRepoPath() }; // shared params for {token} substitution
   document.documentElement.lang = currentLang;
   document.title = t('app.title');
-  document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
-  document.querySelectorAll('[data-i18n-html]').forEach(el => { el.innerHTML = t(el.dataset.i18nHtml); });
-  document.querySelectorAll('[data-i18n-ph]').forEach(el => { el.placeholder = t(el.dataset.i18nPh); });
-  document.querySelectorAll('[data-i18n-aria]').forEach(el => { el.setAttribute('aria-label', t(el.dataset.i18nAria)); });
-  document.querySelectorAll('[data-i18n-title]').forEach(el => { el.setAttribute('title', t(el.dataset.i18nTitle)); });
+  document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n, params); });
+  document.querySelectorAll('[data-i18n-html]').forEach(el => { el.innerHTML = t(el.dataset.i18nHtml, params); });
+  document.querySelectorAll('[data-i18n-ph]').forEach(el => { el.placeholder = t(el.dataset.i18nPh, params); });
+  document.querySelectorAll('[data-i18n-aria]').forEach(el => { el.setAttribute('aria-label', t(el.dataset.i18nAria, params)); });
+  document.querySelectorAll('[data-i18n-title]').forEach(el => { el.setAttribute('title', t(el.dataset.i18nTitle, params)); });
 }
 
 // ─── Translation strings ────────────────────────────────────────────────────
@@ -796,7 +807,7 @@ const STR = {
   'tab.settings':     { en: `Settings`, vi: `Cài đặt`, zh: `设置` },
 
   // Repositories
-  'repos.placeholder': { en: `/absolute/path/to/repo`, vi: `/đường/dẫn/tuyệt/đối/đến/repo`, zh: `/仓库/的/绝对/路径` },
+  'repos.placeholder': { en: `e.g. {path}`, vi: `vd. {path}`, zh: `例如 {path}` },
   'repos.warning':     { en: `Warning: path does not look absolute. It will still be saved.`, vi: `Cảnh báo: đường dẫn không giống đường dẫn tuyệt đối. Vẫn sẽ được lưu.`, zh: `警告：路径看起来不是绝对路径，但仍会被保存。` },
   'repos.configured':  { en: `Configured repositories`, vi: `Repo đã cấu hình`, zh: `已配置的仓库` },
   'repos.indexAll':    { en: `Index All`, vi: `Index tất cả`, zh: `索引全部` },
