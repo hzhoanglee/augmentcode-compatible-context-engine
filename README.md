@@ -1,4 +1,4 @@
-# context-engine-rs
+# vibervn-context-engine
 
 ## Install & Run
 
@@ -32,7 +32,7 @@ Supported platforms: Linux x64/arm64, macOS arm64, Windows x64.
 | Feature | Description |
 |---------|-------------|
 | Semantic code search | Finds code by meaning via embeddings, not literal text matching |
-| Multi-language parsing | Tree-sitter symbol extraction for Python, JavaScript, TypeScript, Rust, Go, and Java |
+| Multi-language parsing | Tree-sitter symbol extraction for Python, JavaScript, TypeScript, Rust, Go, Java, C, and C++ |
 | Call-graph expansion | Resolves caller/callee edges and BFS-expands matched symbols at query time |
 | Incremental indexing | Re-indexes only changed files (mtime + watcher), crash-safe via per-file commit markers |
 | Real-time file watching | `notify` (debounced) triggers re-index automatically on file changes |
@@ -43,6 +43,27 @@ Supported platforms: Linux x64/arm64, macOS arm64, Windows x64.
 | MCP server | Exposes a single `codebase-retrieval` tool over streamable HTTP |
 | SSE progress stream | Streams live indexing progress events to the UI |
 | Large-repo scaling | Bounded memory and no O(n²) paths — built for Linux/Chromium-scale codebases |
+
+## Supported Languages
+
+Tree-sitter symbol extraction (functions, classes, methods, and call edges) is
+implemented per language. File extensions are mapped in `detect_language`
+(`src/parsing/mod.rs`).
+
+| Language | Extensions | Grammar |
+|----------|------------|---------|
+| Python | `.py` | `tree-sitter-python` |
+| JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` | `tree-sitter-javascript` |
+| TypeScript | `.ts` | `tree-sitter-typescript` |
+| TSX | `.tsx` | `tree-sitter-javascript` |
+| Rust | `.rs` | `tree-sitter-rust` |
+| Go | `.go` | `tree-sitter-go` |
+| Java | `.java` | `tree-sitter-java` |
+| C | `.c` | `tree-sitter-c` |
+| C++ | `.cpp`, `.cc`, `.cxx`, `.h`, `.hpp`, `.hxx`, `.hh` | `tree-sitter-cpp` |
+
+Files with any other extension are chunked and embedded for semantic search,
+but no symbols or call edges are extracted from them.
 
 ## How It Works
 

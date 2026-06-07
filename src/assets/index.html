@@ -58,7 +58,17 @@
     <div>
       <h1 class="font-wiki text-3xl dark:text-wiki-heading text-gray-900">Context Engine</h1>
     </div>
-    <button id="btn-theme" aria-label="Toggle dark mode"
+    <div class="flex items-center gap-1">
+    <!-- Language switcher -->
+    <div class="relative">
+      <button id="btn-lang" data-i18n-aria="lang.select" data-i18n-title="lang.select" aria-label="Select language"
+              class="p-1.5 rounded text-gray-500 dark:text-wiki-text-muted hover:bg-gray-100 dark:hover:bg-wiki-surface
+                     focus:outline-none focus:ring-2 focus:ring-blue-400 transition-colors flex items-center">
+        <span id="lang-current-flag" class="block w-6 h-4 rounded-sm overflow-hidden border border-black/10 dark:border-white/10"></span>
+      </button>
+      <div id="lang-menu" class="hidden absolute right-0 top-full mt-1 z-50 min-w-[160px] border border-gray-200 dark:border-wiki-border rounded bg-white dark:bg-wiki-surface shadow-lg py-1"></div>
+    </div>
+    <button id="btn-theme" data-i18n-aria="theme.toggle" aria-label="Toggle dark mode"
             class="p-2 rounded text-gray-500 dark:text-wiki-text-muted hover:bg-gray-100 dark:hover:bg-wiki-surface
                    focus:outline-none focus:ring-2 focus:ring-blue-400 transition-colors">
       <svg id="icon-sun" class="w-5 h-5 hidden" fill="currentColor" viewBox="0 0 24 24">
@@ -68,10 +78,11 @@
         <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
       </svg>
     </button>
+    </div>
   </div>
 
   <!-- Version-too-new banner (hidden by default) -->
-  <div id="banner-version" class="hidden mb-6 p-4 border border-red-400/40 dark:border-red-700/50 bg-red-50 dark:bg-red-900/20 rounded text-red-800 dark:text-red-300 text-sm">
+  <div id="banner-version" data-i18n-html="banner.version" class="hidden mb-6 p-4 border border-red-400/40 dark:border-red-700/50 bg-red-50 dark:bg-red-900/20 rounded text-red-800 dark:text-red-300 text-sm">
     This config was written by a newer version of Context Engine. Upgrade the binary or
     replace <code class="font-mono">settings.json</code> with an older backup.
   </div>
@@ -80,7 +91,7 @@
   <div id="banner-error" class="hidden mb-6 p-4 border border-orange-400/40 dark:border-orange-700/50 bg-orange-50 dark:bg-orange-900/20 rounded text-sm">
     <div class="flex items-center justify-between">
       <span id="banner-error-msg" class="text-orange-800 dark:text-orange-300"></span>
-      <button id="btn-retry" class="ml-4 px-3 py-1 text-xs rounded border border-orange-400 dark:border-orange-600 text-orange-700 dark:text-orange-300
+      <button id="btn-retry" data-i18n="action.retry" class="ml-4 px-3 py-1 text-xs rounded border border-orange-400 dark:border-orange-600 text-orange-700 dark:text-orange-300
              hover:bg-orange-100 dark:hover:bg-orange-900/40 focus:outline-none focus:ring-2 focus:ring-orange-400">
         Retry
       </button>
@@ -94,17 +105,17 @@
         <path d="M12 2L3 7v5c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V7l-9-5zm1 15h-2v-2h2v2zm0-4h-2V8h2v5z"/>
       </svg>
       <div class="flex-1">
-        <p class="text-amber-800 dark:text-amber-300 font-medium mb-1">Windows Defender is scanning indexed files</p>
-        <p class="text-amber-700 dark:text-amber-400/80 text-xs mb-2">
+        <p data-i18n="defender.title" class="text-amber-800 dark:text-amber-300 font-medium mb-1">Windows Defender is scanning indexed files</p>
+        <p data-i18n="defender.desc" class="text-amber-700 dark:text-amber-400/80 text-xs mb-2">
           Real-time protection slows indexing significantly. Add an exclusion for the data directory and process to fix this.
         </p>
         <div class="flex gap-2">
-          <button id="btn-defender-fix" class="px-3 py-1 text-xs rounded border border-amber-500 dark:border-amber-600 text-amber-700 dark:text-amber-300
+          <button id="btn-defender-fix" data-i18n="defender.add" class="px-3 py-1 text-xs rounded border border-amber-500 dark:border-amber-600 text-amber-700 dark:text-amber-300
                  bg-amber-100 dark:bg-amber-900/40 hover:bg-amber-200 dark:hover:bg-amber-900/60
                  focus:outline-none focus:ring-2 focus:ring-amber-400 disabled:opacity-50 disabled:cursor-not-allowed">
             Add exclusion
           </button>
-          <button id="btn-defender-dismiss" class="px-3 py-1 text-xs rounded text-amber-600 dark:text-amber-400
+          <button id="btn-defender-dismiss" data-i18n="action.dismiss" class="px-3 py-1 text-xs rounded text-amber-600 dark:text-amber-400
                  hover:bg-amber-100 dark:hover:bg-amber-900/30 focus:outline-none focus:ring-2 focus:ring-amber-400">
             Dismiss
           </button>
@@ -114,7 +125,7 @@
   </div>
 
   <!-- "Saved" toast -->
-  <div id="toast-saved" class="hidden fixed bottom-6 right-6 bg-gray-900 dark:bg-wiki-surface dark:border dark:border-wiki-border-active text-white dark:text-wiki-text text-sm px-4 py-2 rounded shadow-lg
+  <div id="toast-saved" data-i18n="toast.saved" class="hidden fixed bottom-6 right-6 bg-gray-900 dark:bg-wiki-surface dark:border dark:border-wiki-border-active text-white dark:text-wiki-text text-sm px-4 py-2 rounded shadow-lg
        transition-opacity duration-300 opacity-0">
     Saved
   </div>
@@ -129,18 +140,18 @@
   <div id="main-content" class="hidden">
     <!-- Tab bar (Wikipedia-style underline tabs) -->
     <div role="tablist" id="tablist-main" class="flex border-b border-gray-200 dark:border-wiki-border mb-6">
-      <button role="tab" id="tab-repos" aria-selected="true" aria-controls="panel-repos"
+      <button role="tab" id="tab-repos" aria-selected="true" aria-controls="panel-repos" data-i18n="tab.repos"
               class="tab-btn px-4 py-2 text-sm border-b-2 border-blue-600 dark:border-wiki-border-active text-gray-900 dark:text-wiki-heading
                      focus:outline-none focus:ring-2 focus:ring-blue-400">
         Repositories
       </button>
-      <button role="tab" id="tab-mcp" aria-selected="false" aria-controls="panel-mcp"
+      <button role="tab" id="tab-mcp" aria-selected="false" aria-controls="panel-mcp" data-i18n="tab.mcp"
               class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-gray-500 dark:text-wiki-text-muted
                      hover:text-gray-900 dark:hover:text-wiki-heading hover:border-gray-300 dark:hover:border-wiki-border
                      focus:outline-none focus:ring-2 focus:ring-blue-400">
         MCP
       </button>
-      <button role="tab" id="tab-settings" aria-selected="false" aria-controls="panel-settings"
+      <button role="tab" id="tab-settings" aria-selected="false" aria-controls="panel-settings" data-i18n="tab.settings"
               class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-gray-500 dark:text-wiki-text-muted
                      hover:text-gray-900 dark:hover:text-wiki-heading hover:border-gray-300 dark:hover:border-wiki-border
                      focus:outline-none focus:ring-2 focus:ring-blue-400">
@@ -152,38 +163,38 @@
     <div role="tabpanel" id="panel-repos">
       <div class="mb-6">
         <form id="form-add-repo" class="flex gap-2" onsubmit="return false;">
-          <input id="input-repo" type="text" placeholder="/absolute/path/to/repo"
+          <input id="input-repo" type="text" placeholder="/absolute/path/to/repo" data-i18n-ph="repos.placeholder"
                  class="flex-1 border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface rounded px-3 py-2 text-sm
                         text-gray-900 dark:text-wiki-text placeholder:text-gray-400 dark:placeholder:text-wiki-text-muted
                         focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
-          <button type="submit" id="btn-add-repo"
+          <button type="submit" id="btn-add-repo" data-i18n="action.add"
                   class="px-4 py-2 bg-blue-600 dark:bg-wiki-border-active/20 dark:border dark:border-wiki-border-active text-white dark:text-wiki-link text-sm rounded
                          hover:bg-blue-700 dark:hover:bg-wiki-border-active/30 focus:outline-none focus:ring-2 focus:ring-blue-400">
             Add
           </button>
         </form>
-        <p id="repo-warning" class="hidden text-amber-600 dark:text-amber-400 text-xs mt-1">
+        <p id="repo-warning" data-i18n="repos.warning" class="hidden text-amber-600 dark:text-amber-400 text-xs mt-1">
           Warning: path does not look absolute. It will still be saved.
         </p>
       </div>
       <div class="flex items-center justify-between mb-3">
-        <span class="text-xs text-gray-500 dark:text-wiki-text-muted">Configured repositories</span>
-        <button id="btn-index-all"
+        <span data-i18n="repos.configured" class="text-xs text-gray-500 dark:text-wiki-text-muted">Configured repositories</span>
+        <button id="btn-index-all" data-i18n="repos.indexAll"
                 class="px-3 py-1 text-xs rounded border border-gray-300 dark:border-wiki-border text-gray-600 dark:text-wiki-text-muted
                        hover:bg-gray-100 dark:hover:bg-wiki-surface hover:text-gray-900 dark:hover:text-wiki-text
                        focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50 disabled:cursor-not-allowed">
           Index All
         </button>
       </div>
-      <input id="input-repo-filter" type="text" placeholder="Filter repositories…"
+      <input id="input-repo-filter" type="text" placeholder="Filter repositories…" data-i18n-ph="repos.filter"
              class="hidden w-full mb-3 border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface rounded px-3 py-2 text-sm
                     text-gray-900 dark:text-wiki-text placeholder:text-gray-400 dark:placeholder:text-wiki-text-muted
                     focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
       <div id="repos-list" class="space-y-2"></div>
-      <div id="repos-empty" class="hidden text-gray-400 dark:text-wiki-text-muted text-sm">
+      <div id="repos-empty" data-i18n="repos.empty" class="hidden text-gray-400 dark:text-wiki-text-muted text-sm">
         No repositories configured. Add an absolute path above.
       </div>
-      <div id="repos-no-match" class="hidden text-gray-400 dark:text-wiki-text-muted text-sm">
+      <div id="repos-no-match" data-i18n="repos.noMatch" class="hidden text-gray-400 dark:text-wiki-text-muted text-sm">
         No repositories match the filter.
       </div>
     </div>
@@ -191,17 +202,17 @@
     <!-- Tab: Settings (Embedding + LLM) -->
     <div role="tabpanel" id="panel-settings" class="hidden">
       <!-- Setup hint (shown when no embedding keys configured) -->
-      <div id="banner-setup" class="hidden mb-6 p-4 border border-blue-400/40 dark:border-wiki-border-active/50 bg-blue-50 dark:bg-wiki-border-active/10 rounded text-sm text-blue-800 dark:text-wiki-link">
+      <div id="banner-setup" data-i18n="settings.setupHint" class="hidden mb-6 p-4 border border-blue-400/40 dark:border-wiki-border-active/50 bg-blue-50 dark:bg-wiki-border-active/10 rounded text-sm text-blue-800 dark:text-wiki-link">
         Add an embedding API key below to start indexing repositories.
       </div>
 
       <!-- Section: Embedding Provider -->
       <section class="mb-8">
-        <h2 class="font-wiki text-xl dark:text-wiki-heading text-gray-900 border-b border-gray-200 dark:border-wiki-border pb-2 mb-4">
+        <h2 data-i18n="embed.heading" class="font-wiki text-xl dark:text-wiki-heading text-gray-900 border-b border-gray-200 dark:border-wiki-border pb-2 mb-4">
           Embedding Provider
         </h2>
         <div class="mb-4">
-          <label class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1">Provider</label>
+          <label data-i18n="field.provider" class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1">Provider</label>
           <select id="embedding-provider"
                   class="border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm
                          focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active">
@@ -209,7 +220,7 @@
           </select>
         </div>
         <div class="mb-4">
-          <label class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1" for="embedding-model">
+          <label data-i18n="embed.model" class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1" for="embedding-model">
             Embedding model
           </label>
           <input id="embedding-model" type="text" placeholder="e.g. voyage-4-lite"
@@ -218,7 +229,7 @@
                         focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
         </div>
         <div class="mb-4">
-          <label class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1" for="embedding-concurrency">
+          <label data-i18n="embed.concurrency" class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1" for="embedding-concurrency">
             Concurrent batches per key
           </label>
           <input id="embedding-concurrency" type="number" min="1" placeholder="16"
@@ -227,15 +238,15 @@
                         focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
         </div>
         <div class="mb-2">
-          <label class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1">API keys</label>
+          <label data-i18n="field.apiKeys" class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1">API keys</label>
           <div id="embedding-keys-list" class="space-y-2 mb-2"></div>
         </div>
         <form id="form-add-embedding-key" class="flex gap-2" onsubmit="return false;">
-          <input id="input-embedding-key" type="text" placeholder="Paste API key"
+          <input id="input-embedding-key" type="text" placeholder="Paste API key" data-i18n-ph="field.pasteKey"
                  class="flex-1 border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm font-mono
                         placeholder:text-gray-400 dark:placeholder:text-wiki-text-muted
                         focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
-          <button type="submit"
+          <button type="submit" data-i18n="action.add"
                   class="px-4 py-2 bg-blue-600 dark:bg-wiki-border-active/20 dark:border dark:border-wiki-border-active text-white dark:text-wiki-link text-sm rounded
                          hover:bg-blue-700 dark:hover:bg-wiki-border-active/30 focus:outline-none focus:ring-2 focus:ring-blue-400">
             Add
@@ -244,15 +255,15 @@
 
         <!-- Embedding Cache -->
         <div class="mt-6 pt-4 border-t border-gray-200 dark:border-wiki-border">
-          <label class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-2">Embedding Cache</label>
+          <label data-i18n="cache.label" class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-2">Embedding Cache</label>
           <div class="flex items-center gap-2">
             <select id="cache-purge-scope"
                     class="border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm
                            focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active">
-              <option value="all">All time</option>
-              <option value="30d">Older than 30 days</option>
+              <option value="all" data-i18n="cache.allTime">All time</option>
+              <option value="30d" data-i18n="cache.older30">Older than 30 days</option>
             </select>
-            <button id="btn-purge-cache"
+            <button id="btn-purge-cache" data-i18n="cache.clear"
                     class="px-3 py-2 text-sm rounded border border-gray-300 dark:border-wiki-border text-gray-600 dark:text-wiki-text-muted
                            hover:bg-gray-100 dark:hover:bg-wiki-surface hover:text-gray-900 dark:hover:text-wiki-text
                            focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50 disabled:cursor-not-allowed">
@@ -263,11 +274,11 @@
         </div>
       </section>
       <section>
-        <h2 class="font-wiki text-xl dark:text-wiki-heading text-gray-900 border-b border-gray-200 dark:border-wiki-border pb-2 mb-4">
+        <h2 data-i18n="llm.heading" class="font-wiki text-xl dark:text-wiki-heading text-gray-900 border-b border-gray-200 dark:border-wiki-border pb-2 mb-4">
           LLM Keys
         </h2>
         <div class="mb-4">
-          <label class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1">Provider</label>
+          <label data-i18n="field.provider" class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1">Provider</label>
           <select id="llm-provider"
                   class="border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm
                          focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active">
@@ -275,7 +286,7 @@
           </select>
         </div>
         <div class="mb-4">
-          <label class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1" for="llm-rerank-model">
+          <label data-i18n="llm.rerankModel" class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1" for="llm-rerank-model">
             Rerank model
           </label>
           <input id="llm-rerank-model" type="text" placeholder="e.g. gemini-3.1-flash-lite"
@@ -284,14 +295,14 @@
                         focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
         </div>
         <div class="mb-4">
-          <label class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1" for="llm-min-prune-lines">
+          <label data-i18n="llm.minPrune" class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1" for="llm-min-prune-lines">
             Min prune lines
           </label>
           <input id="llm-min-prune-lines" type="number" min="0" step="1" placeholder="16"
                  class="w-full border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm
                         placeholder:text-gray-400 dark:placeholder:text-wiki-text-muted
                         focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
-          <p class="mt-1 text-xs text-gray-400 dark:text-wiki-text-muted">
+          <p data-i18n="llm.minPruneHelp" class="mt-1 text-xs text-gray-400 dark:text-wiki-text-muted">
             Chunks smaller than this many lines are returned whole; larger ones may be narrowed to relevant line ranges.
           </p>
         </div>
@@ -300,22 +311,22 @@
             <input id="llm-use-structured-output" type="checkbox"
                    class="h-4 w-4 rounded border-gray-300 dark:border-wiki-border text-blue-600
                           focus:outline-none focus:ring-2 focus:ring-blue-400" />
-            Use structured output
+            <span data-i18n="llm.structured">Use structured output</span>
           </label>
-          <p class="mt-1 text-xs text-gray-400 dark:text-wiki-text-muted">
+          <p data-i18n="llm.structuredHelp" class="mt-1 text-xs text-gray-400 dark:text-wiki-text-muted">
             Request the provider's native JSON output for reranking instead of XML tags. Providers without a JSON mode fall back to the XML path automatically.
           </p>
         </div>
         <div class="mb-2">
-          <label class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1">API keys</label>
+          <label data-i18n="field.apiKeys" class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1">API keys</label>
           <div id="llm-keys-list" class="space-y-2 mb-2"></div>
         </div>
         <form id="form-add-llm-key" class="flex gap-2" onsubmit="return false;">
-          <input id="input-llm-key" type="text" placeholder="Paste API key"
+          <input id="input-llm-key" type="text" placeholder="Paste API key" data-i18n-ph="field.pasteKey"
                  class="flex-1 border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm font-mono
                         placeholder:text-gray-400 dark:placeholder:text-wiki-text-muted
                         focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
-          <button type="submit"
+          <button type="submit" data-i18n="action.add"
                   class="px-4 py-2 bg-blue-600 dark:bg-wiki-border-active/20 dark:border dark:border-wiki-border-active text-white dark:text-wiki-link text-sm rounded
                          hover:bg-blue-700 dark:hover:bg-wiki-border-active/30 focus:outline-none focus:ring-2 focus:ring-blue-400">
             Add
@@ -329,18 +340,18 @@
 
       <!-- MCP sub-tab bar -->
       <div role="tablist" id="tablist-mcp" class="flex border-b border-gray-200 dark:border-wiki-border mb-6">
-        <button role="tab" id="mcptab-endpoint" aria-selected="true" aria-controls="mcppanel-endpoint"
+        <button role="tab" id="mcptab-endpoint" aria-selected="true" aria-controls="mcppanel-endpoint" data-i18n="mcp.endpoint"
                 class="mcptab-btn px-4 py-2 text-sm border-b-2 border-blue-600 dark:border-wiki-border-active text-gray-900 dark:text-wiki-heading
                        focus:outline-none focus:ring-2 focus:ring-blue-400">
           Endpoint
         </button>
-        <button role="tab" id="mcptab-claude" aria-selected="false" aria-controls="mcppanel-claude"
+        <button role="tab" id="mcptab-claude" aria-selected="false" aria-controls="mcppanel-claude" data-i18n="mcp.claudeCode"
                 class="mcptab-btn px-4 py-2 text-sm border-b-2 border-transparent text-gray-500 dark:text-wiki-text-muted
                        hover:text-gray-900 dark:hover:text-wiki-heading hover:border-gray-300 dark:hover:border-wiki-border
                        focus:outline-none focus:ring-2 focus:ring-blue-400">
           Claude Code
         </button>
-        <button role="tab" id="mcptab-test" aria-selected="false" aria-controls="mcppanel-test"
+        <button role="tab" id="mcptab-test" aria-selected="false" aria-controls="mcppanel-test" data-i18n="mcp.test"
                 class="mcptab-btn px-4 py-2 text-sm border-b-2 border-transparent text-gray-500 dark:text-wiki-text-muted
                        hover:text-gray-900 dark:hover:text-wiki-heading hover:border-gray-300 dark:hover:border-wiki-border
                        focus:outline-none focus:ring-2 focus:ring-blue-400">
@@ -350,14 +361,14 @@
 
       <!-- MCP sub-panel: Endpoint -->
       <div role="tabpanel" id="mcppanel-endpoint">
-        <p class="text-sm text-gray-600 dark:text-wiki-text-muted mb-3">
+        <p data-i18n="mcp.endpointDesc" class="text-sm text-gray-600 dark:text-wiki-text-muted mb-3">
           Streamable-HTTP MCP endpoint. Point any MCP-compatible client here.
         </p>
         <div class="flex items-center gap-2">
           <code id="mcp-endpoint-url"
                 class="flex-1 font-mono text-sm px-3 py-2 rounded border border-gray-200 dark:border-wiki-border
                        bg-gray-50 dark:bg-wiki-surface text-gray-800 dark:text-wiki-link select-all"></code>
-          <button id="btn-copy-endpoint"
+          <button id="btn-copy-endpoint" data-i18n="action.copy"
                   class="px-3 py-2 text-sm rounded border border-gray-300 dark:border-wiki-border
                          text-gray-600 dark:text-wiki-text-muted hover:bg-gray-100 dark:hover:bg-wiki-surface
                          hover:text-gray-900 dark:hover:text-wiki-text
@@ -369,14 +380,14 @@
 
       <!-- MCP sub-panel: Claude Code -->
       <div role="tabpanel" id="mcppanel-claude" class="hidden">
-        <p class="text-sm text-gray-600 dark:text-wiki-text-muted mb-3">
+        <p data-i18n="mcp.claudeCmdDesc" class="text-sm text-gray-600 dark:text-wiki-text-muted mb-3">
           Run this command in your terminal to register the MCP server with Claude Code.
         </p>
         <div class="flex items-center gap-2">
           <code id="mcp-claude-cmd"
                 class="flex-1 font-mono text-sm px-3 py-2 rounded border border-gray-200 dark:border-wiki-border
                        bg-gray-50 dark:bg-wiki-surface text-gray-800 dark:text-wiki-link select-all whitespace-pre-wrap break-all block"></code>
-          <button id="btn-copy-claude"
+          <button id="btn-copy-claude" data-i18n="action.copy"
                   class="px-3 py-2 text-sm rounded border border-gray-300 dark:border-wiki-border
                          text-gray-600 dark:text-wiki-text-muted hover:bg-gray-100 dark:hover:bg-wiki-surface
                          hover:text-gray-900 dark:hover:text-wiki-text
@@ -385,14 +396,14 @@
           </button>
         </div>
 
-        <p class="text-sm text-gray-600 dark:text-wiki-text-muted mt-6 mb-3">
+        <p data-i18n-html="mcp.claudeMdDesc" class="text-sm text-gray-600 dark:text-wiki-text-muted mt-6 mb-3">
           Add the following to your project's <code class="font-mono text-xs px-1 py-0.5 rounded bg-gray-100 dark:bg-wiki-surface">CLAUDE.md</code> so Claude prefers the context engine for codebase exploration.
         </p>
         <div class="flex items-start gap-2">
           <pre id="mcp-claude-md"
                class="flex-1 font-mono text-sm px-3 py-2 rounded border border-gray-200 dark:border-wiki-border
                       bg-gray-50 dark:bg-wiki-surface text-gray-800 dark:text-wiki-link select-all whitespace-pre-wrap break-words block m-0"></pre>
-          <button id="btn-copy-claude-md"
+          <button id="btn-copy-claude-md" data-i18n="action.copy"
                   class="px-3 py-2 text-sm rounded border border-gray-300 dark:border-wiki-border
                          text-gray-600 dark:text-wiki-text-muted hover:bg-gray-100 dark:hover:bg-wiki-surface
                          hover:text-gray-900 dark:hover:text-wiki-text
@@ -405,7 +416,7 @@
 
       <!-- MCP sub-panel: Test -->
       <div role="tabpanel" id="mcppanel-test" class="hidden">
-        <p class="text-sm text-gray-600 dark:text-wiki-text-muted mb-4">
+        <p data-i18n="mcp.testDesc" class="text-sm text-gray-600 dark:text-wiki-text-muted mb-4">
           Send a request directly to the MCP tool and see the raw output.
         </p>
         <div class="space-y-3 mb-4">
@@ -413,7 +424,7 @@
             <label class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1"
                    for="mcp-test-query">information_request</label>
             <textarea id="mcp-test-query" rows="3"
-                      placeholder="e.g. Where is authentication handled?"
+                      placeholder="e.g. Where is authentication handled?" data-i18n-ph="mcp.testQueryPlaceholder"
                       class="w-full border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm
                              placeholder:text-gray-400 dark:placeholder:text-wiki-text-muted resize-y
                              focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active"></textarea>
@@ -424,13 +435,13 @@
             <select id="mcp-test-workspace-select"
                     class="w-full mb-2 border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm
                            focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active"></select>
-            <input id="mcp-test-workspace" type="text" placeholder="/absolute/path/to/repo"
+            <input id="mcp-test-workspace" type="text" placeholder="/absolute/path/to/repo" data-i18n-ph="repos.placeholder"
                    class="hidden w-full border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm
                           placeholder:text-gray-400 dark:placeholder:text-wiki-text-muted
                           focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
           </div>
         </div>
-        <button id="btn-mcp-run"
+        <button id="btn-mcp-run" data-i18n="action.run"
                 class="px-4 py-2 bg-blue-600 dark:bg-wiki-border-active/20 dark:border dark:border-wiki-border-active text-white dark:text-wiki-link text-sm rounded
                        hover:bg-blue-700 dark:hover:bg-wiki-border-active/30 focus:outline-none focus:ring-2 focus:ring-blue-400
                        disabled:opacity-50 disabled:cursor-not-allowed">
@@ -448,7 +459,7 @@
   <!-- Repo detail page (full overlay, hidden by default) -->
   <div id="search-page" class="hidden">
     <div class="flex items-center gap-2 mb-4 border-b border-gray-200 dark:border-wiki-border pb-3">
-      <button id="btn-search-back"
+      <button id="btn-search-back" data-i18n="action.back"
               class="text-sm text-gray-500 dark:text-wiki-text-muted hover:text-gray-900 dark:hover:text-wiki-heading
                      focus:outline-none focus:ring-2 focus:ring-blue-400 rounded px-2 py-1">
         &larr; Back
@@ -458,12 +469,12 @@
 
     <!-- Sub-tab switcher (Index Explorer / Search) -->
     <div role="tablist" id="tablist-repo" class="flex border-b border-gray-200 dark:border-wiki-border mb-6">
-      <button role="tab" id="subtab-explorer" aria-selected="true" aria-controls="subpanel-explorer"
+      <button role="tab" id="subtab-explorer" aria-selected="true" aria-controls="subpanel-explorer" data-i18n="repo.explorer"
               class="subtab-btn px-4 py-2 text-sm border-b-2 border-blue-600 dark:border-wiki-border-active text-gray-900 dark:text-wiki-heading
                      focus:outline-none focus:ring-2 focus:ring-blue-400">
         Index Explorer
       </button>
-      <button role="tab" id="subtab-search" aria-selected="false" aria-controls="subpanel-search"
+      <button role="tab" id="subtab-search" aria-selected="false" aria-controls="subpanel-search" data-i18n="repo.search"
               class="subtab-btn px-4 py-2 text-sm border-b-2 border-transparent text-gray-500 dark:text-wiki-text-muted
                      hover:text-gray-900 dark:hover:text-wiki-heading hover:border-gray-300 dark:hover:border-wiki-border
                      focus:outline-none focus:ring-2 focus:ring-blue-400">
@@ -481,20 +492,20 @@
 
       <!-- Toolbar -->
       <div class="flex flex-wrap items-center gap-2 mb-6">
-        <button id="btn-rebuild"
+        <button id="btn-rebuild" data-i18n="repo.rebuild"
                 class="px-3 py-1.5 bg-blue-600 dark:bg-wiki-border-active/20 dark:border dark:border-wiki-border-active text-white dark:text-wiki-link text-sm rounded
                        hover:bg-blue-700 dark:hover:bg-wiki-border-active/30 focus:outline-none focus:ring-2 focus:ring-blue-400
                        disabled:opacity-50 disabled:cursor-not-allowed">
           Rebuild Index
         </button>
-        <button id="btn-incremental"
+        <button id="btn-incremental" data-i18n="repo.incremental"
                 class="px-3 py-1.5 text-sm rounded border border-gray-300 dark:border-wiki-border text-gray-600 dark:text-wiki-text-muted
                        hover:bg-gray-100 dark:hover:bg-wiki-surface hover:text-gray-900 dark:hover:text-wiki-text
                        focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50 disabled:cursor-not-allowed">
           Incremental Update
         </button>
         <span id="explorer-action-status" class="text-xs text-gray-400 dark:text-wiki-text-muted"></span>
-        <button id="btn-explorer-refresh"
+        <button id="btn-explorer-refresh" data-i18n="action.refresh"
                 class="ml-auto px-2 py-1 text-xs rounded border border-gray-300 dark:border-wiki-border text-gray-500 dark:text-wiki-text-muted
                        hover:bg-gray-100 dark:hover:bg-wiki-surface hover:text-gray-900 dark:hover:text-wiki-text
                        focus:outline-none focus:ring-2 focus:ring-blue-400">
@@ -505,7 +516,7 @@
       <!-- Call graph -->
       <section class="mb-6">
         <div class="flex items-center justify-between mb-2">
-          <h2 class="font-wiki text-xl dark:text-wiki-heading text-gray-900">Call graph</h2>
+          <h2 data-i18n="graph.heading" class="font-wiki text-xl dark:text-wiki-heading text-gray-900">Call graph</h2>
           <span id="graph-meta" class="text-xs text-gray-400 dark:text-wiki-text-muted"></span>
         </div>
         <div id="graph-container"
@@ -522,9 +533,9 @@
               <span class="absolute rounded-full bg-gray-200 dark:bg-wiki-border" style="width:8px;height:8px;left:63%;top:53%"></span>
               <span class="absolute rounded-full bg-gray-200 dark:bg-wiki-border" style="width:7px;height:7px;left:34%;top:40%"></span>
             </div>
-            <div class="absolute inset-x-0 bottom-3 text-center text-xs text-gray-400 dark:text-wiki-text-muted">Loading call graph…</div>
+            <div data-i18n="graph.loading" class="absolute inset-x-0 bottom-3 text-center text-xs text-gray-400 dark:text-wiki-text-muted">Loading call graph…</div>
           </div>
-          <div id="graph-empty"
+          <div id="graph-empty" data-i18n="graph.empty"
                class="hidden absolute inset-0 flex items-center justify-center text-sm text-gray-400 dark:text-wiki-text-muted">
             No call relationships in the index yet.
           </div>
@@ -534,14 +545,14 @@
 
       <!-- File browser + detail -->
       <section>
-        <h2 class="font-wiki text-xl dark:text-wiki-heading text-gray-900 mb-2">Indexed files</h2>
-        <input id="input-file-filter" type="text" placeholder="Filter files…"
+        <h2 data-i18n="files.heading" class="font-wiki text-xl dark:text-wiki-heading text-gray-900 mb-2">Indexed files</h2>
+        <input id="input-file-filter" type="text" placeholder="Filter files…" data-i18n-ph="files.filter"
                class="hidden w-full mb-3 border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface rounded px-3 py-2 text-sm
                       text-gray-900 dark:text-wiki-text placeholder:text-gray-400 dark:placeholder:text-wiki-text-muted
                       focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
         <div id="files-list" class="border border-gray-200 dark:border-wiki-border rounded divide-y divide-gray-100 dark:divide-wiki-border
                     overflow-y-auto" style="max-height: 320px;"></div>
-        <div id="files-empty" class="hidden text-gray-400 dark:text-wiki-text-muted text-sm mt-2">
+        <div id="files-empty" data-i18n="files.empty" class="hidden text-gray-400 dark:text-wiki-text-muted text-sm mt-2">
           No files indexed yet. Use Rebuild Index to build the index.
         </div>
         <div id="files-truncated" class="hidden text-amber-600 dark:text-amber-400 text-xs mt-2"></div>
@@ -550,7 +561,7 @@
         <div id="chunk-detail" class="hidden mt-4 border border-gray-200 dark:border-wiki-border rounded bg-white dark:bg-wiki-surface">
           <div class="flex items-center justify-between px-3 py-2 border-b border-gray-100 dark:border-wiki-border">
             <span id="chunk-detail-title" class="font-mono text-xs text-gray-700 dark:text-wiki-link truncate mr-2"></span>
-            <button id="btn-chunk-close"
+            <button id="btn-chunk-close" data-i18n="action.close"
                     class="text-xs text-gray-400 dark:text-wiki-text-muted hover:text-gray-700 dark:hover:text-wiki-text
                            focus:outline-none focus:ring-2 focus:ring-blue-400 rounded px-2 py-0.5">
               Close
@@ -565,11 +576,11 @@
     <!-- Sub-tab: Search -->
     <div role="tabpanel" id="subpanel-search" class="hidden">
       <form id="form-search" class="flex gap-2 mb-3" onsubmit="return false;">
-        <input id="input-search" type="text" placeholder="Search this repository…"
+        <input id="input-search" type="text" placeholder="Search this repository…" data-i18n-ph="search.placeholder"
                class="flex-1 border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface rounded px-3 py-2 text-sm
                       text-gray-900 dark:text-wiki-text placeholder:text-gray-400 dark:placeholder:text-wiki-text-muted
                       focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
-        <button type="submit" id="btn-search"
+        <button type="submit" id="btn-search" data-i18n="repo.search"
                 class="px-4 py-2 bg-blue-600 dark:bg-wiki-border-active/20 dark:border dark:border-wiki-border-active text-white dark:text-wiki-link text-sm rounded
                        hover:bg-blue-700 dark:hover:bg-wiki-border-active/30 focus:outline-none focus:ring-2 focus:ring-blue-400
                        disabled:opacity-50 disabled:cursor-not-allowed">
@@ -582,24 +593,24 @@
       <!-- Result sub-tabs: Results / Pre-rerank / LLM Response -->
       <div id="search-result-tabs" class="hidden">
         <div role="tablist" id="tablist-results" class="flex border-b border-gray-200 dark:border-wiki-border mb-4">
-          <button role="tab" id="rtab-results" aria-selected="true" aria-controls="rpanel-results"
+          <button role="tab" id="rtab-results" aria-selected="true" aria-controls="rpanel-results" data-i18n="search.tabResults"
                   class="rtab-btn px-3 py-1.5 text-xs border-b-2 border-blue-600 dark:border-wiki-border-active text-gray-900 dark:text-wiki-heading
                          focus:outline-none focus:ring-2 focus:ring-blue-400">
             Results
           </button>
-          <button role="tab" id="rtab-prererank" aria-selected="false" aria-controls="rpanel-prererank"
+          <button role="tab" id="rtab-prererank" aria-selected="false" aria-controls="rpanel-prererank" data-i18n="search.tabPrererank"
                   class="rtab-btn px-3 py-1.5 text-xs border-b-2 border-transparent text-gray-500 dark:text-wiki-text-muted
                          hover:text-gray-900 dark:hover:text-wiki-heading hover:border-gray-300 dark:hover:border-wiki-border
                          focus:outline-none focus:ring-2 focus:ring-blue-400">
             Pre-rerank
           </button>
-          <button role="tab" id="rtab-llm-request" aria-selected="false" aria-controls="rpanel-llm-request"
+          <button role="tab" id="rtab-llm-request" aria-selected="false" aria-controls="rpanel-llm-request" data-i18n="search.tabLlmReq"
                   class="rtab-btn px-3 py-1.5 text-xs border-b-2 border-transparent text-gray-500 dark:text-wiki-text-muted
                          hover:text-gray-900 dark:hover:text-wiki-heading hover:border-gray-300 dark:hover:border-wiki-border
                          focus:outline-none focus:ring-2 focus:ring-blue-400">
             LLM Request
           </button>
-          <button role="tab" id="rtab-llm" aria-selected="false" aria-controls="rpanel-llm"
+          <button role="tab" id="rtab-llm" aria-selected="false" aria-controls="rpanel-llm" data-i18n="search.tabLlmResp"
                   class="rtab-btn px-3 py-1.5 text-xs border-b-2 border-transparent text-gray-500 dark:text-wiki-text-muted
                          hover:text-gray-900 dark:hover:text-wiki-heading hover:border-gray-300 dark:hover:border-wiki-border
                          focus:outline-none focus:ring-2 focus:ring-blue-400">
@@ -611,13 +622,13 @@
         <div role="tabpanel" id="rpanel-results">
           <div id="search-rerank-badge" class="hidden mb-3 text-xs text-gray-400 dark:text-wiki-text-muted"></div>
           <div id="search-results" class="space-y-4"></div>
-          <div id="search-empty" class="hidden text-gray-400 dark:text-wiki-text-muted text-sm">No results found.</div>
+          <div id="search-empty" data-i18n="search.noResults" class="hidden text-gray-400 dark:text-wiki-text-muted text-sm">No results found.</div>
         </div>
 
         <!-- Pre-rerank tab -->
         <div role="tabpanel" id="rpanel-prererank" class="hidden">
           <div id="search-prererank-results" class="space-y-4"></div>
-          <div id="search-prererank-empty" class="hidden text-gray-400 dark:text-wiki-text-muted text-sm">No results found.</div>
+          <div id="search-prererank-empty" data-i18n="search.noResults" class="hidden text-gray-400 dark:text-wiki-text-muted text-sm">No results found.</div>
         </div>
 
         <!-- LLM Request tab -->
@@ -625,7 +636,7 @@
           <pre id="search-llm-request"
                class="text-xs p-3 border border-gray-200 dark:border-wiki-border rounded bg-white dark:bg-wiki-surface
                       text-gray-800 dark:text-wiki-text font-mono leading-relaxed overflow-x-auto whitespace-pre-wrap max-h-[600px] overflow-y-auto"></pre>
-          <div id="search-llm-request-empty" class="hidden text-gray-400 dark:text-wiki-text-muted text-sm">No LLM request available.</div>
+          <div id="search-llm-request-empty" data-i18n="search.noLlmReq" class="hidden text-gray-400 dark:text-wiki-text-muted text-sm">No LLM request available.</div>
         </div>
 
         <!-- LLM Response tab -->
@@ -633,7 +644,7 @@
           <pre id="search-llm-response"
                class="text-xs p-3 border border-gray-200 dark:border-wiki-border rounded bg-white dark:bg-wiki-surface
                       text-gray-800 dark:text-wiki-text font-mono leading-relaxed overflow-x-auto whitespace-pre-wrap max-h-[600px] overflow-y-auto"></pre>
-          <div id="search-llm-empty" class="hidden text-gray-400 dark:text-wiki-text-muted text-sm">No LLM response available.</div>
+          <div id="search-llm-empty" data-i18n="search.noLlmResp" class="hidden text-gray-400 dark:text-wiki-text-muted text-sm">No LLM response available.</div>
         </div>
       </div>
 
@@ -641,14 +652,23 @@
   </div><!-- /search-page -->
 </div><!-- /container -->
 
+<!-- First-run language picker (overlay) -->
+<div id="modal-lang-picker" class="hidden fixed inset-0 z-[110] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+  <div class="w-full max-w-sm mx-4 bg-white dark:bg-wiki-surface border border-gray-200 dark:border-wiki-border rounded-lg shadow-2xl p-6">
+    <h3 data-i18n="lang.pickerTitle" class="font-wiki text-xl text-gray-900 dark:text-wiki-heading mb-1">Choose your language</h3>
+    <p class="text-sm text-gray-500 dark:text-wiki-text-muted mb-4">Chọn ngôn ngữ · 选择语言</p>
+    <div id="lang-picker-options" class="space-y-2"></div>
+  </div>
+</div>
+
 <!-- Indexing Progress Modal -->
 <div id="modal-index-progress" class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
   <div class="w-full max-w-2xl mx-4 bg-white dark:bg-wiki-surface border border-gray-200 dark:border-wiki-border rounded-lg shadow-2xl flex flex-col max-h-[80vh]">
     <!-- Header -->
     <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-wiki-border">
-      <h3 class="text-sm font-medium text-gray-900 dark:text-wiki-heading">Indexing Progress</h3>
+      <h3 data-i18n="modal.indexProgress" class="text-sm font-medium text-gray-900 dark:text-wiki-heading">Indexing Progress</h3>
       <div class="flex items-center gap-2">
-        <button id="btn-cancel-index-modal"
+        <button id="btn-cancel-index-modal" data-i18n="action.cancel"
                 class="text-xs px-2 py-1 rounded border border-red-400 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20
                        focus:outline-none focus:ring-2 focus:ring-red-300">
           Cancel
@@ -676,6 +696,336 @@ let saveTimer = null;
 let indexStatuses = {}; // keyed by repo path
 let indexPollTimer = null;
 let repoFilter = '';
+
+// ─── i18n ──────────────────────────────────────────────────────────────────
+// Client-only locale (en | vi | zh), persisted in localStorage like the theme.
+// Technical tokens (MCP, LLM, CLAUDE.md, information_request, example paths,
+// the streaming index-log verbs) deliberately stay literal across locales.
+let currentLang = 'en';
+const LANGS = ['en', 'vi', 'zh'];
+const LANG_NAMES = { en: 'English', vi: 'Tiếng Việt', zh: '中文' };
+
+// Hand-built inline SVG flags (no emoji — Windows renders flag emoji as letter
+// codes; no icon library per DNA). 3:2 viewBox, filling a rounded clip.
+function starPts(cx, cy, r, rot) {
+  let p = '';
+  for (let i = 0; i < 5; i++) {
+    const a = rot + i * (2 * Math.PI / 5);
+    p += (cx + r * Math.cos(a)) + ',' + (cy + r * Math.sin(a)) + ' ';
+    const a2 = a + Math.PI / 5;
+    p += (cx + r * 0.4 * Math.cos(a2)) + ',' + (cy + r * 0.4 * Math.sin(a2)) + ' ';
+  }
+  return p.trim();
+}
+const FLAGS = {
+  en: '<svg viewBox="0 0 60 40" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none" class="w-full h-full">' +
+        '<rect width="60" height="40" fill="#012169"/>' +
+        '<path d="M0,0 60,40 M60,0 0,40" stroke="#fff" stroke-width="8"/>' +
+        '<path d="M0,0 60,40 M60,0 0,40" stroke="#C8102E" stroke-width="4"/>' +
+        '<path d="M30,0 V40 M0,20 H60" stroke="#fff" stroke-width="13"/>' +
+        '<path d="M30,0 V40 M0,20 H60" stroke="#C8102E" stroke-width="8"/></svg>',
+  vi: '<svg viewBox="0 0 60 40" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none" class="w-full h-full">' +
+        '<rect width="60" height="40" fill="#DA251D"/>' +
+        '<polygon points="' + starPts(30, 20, 11, -Math.PI / 2) + '" fill="#FF0"/></svg>',
+  zh: '<svg viewBox="0 0 60 40" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none" class="w-full h-full">' +
+        '<rect width="60" height="40" fill="#DE2910"/>' +
+        '<polygon points="' + starPts(10, 10, 6, -Math.PI / 2) + '" fill="#FFDE00"/>' +
+        '<polygon points="' + starPts(20, 4, 2, -Math.PI / 2) + '" fill="#FFDE00"/>' +
+        '<polygon points="' + starPts(24, 9, 2, -Math.PI / 2) + '" fill="#FFDE00"/>' +
+        '<polygon points="' + starPts(24, 16, 2, -Math.PI / 2) + '" fill="#FFDE00"/>' +
+        '<polygon points="' + starPts(20, 21, 2, -Math.PI / 2) + '" fill="#FFDE00"/></svg>',
+};
+
+function t(key, params) {
+  const entry = STR[key];
+  let s = entry ? (entry[currentLang] != null ? entry[currentLang] : entry.en) : key;
+  if (params) { for (const k in params) s = s.split('{' + k + '}').join(params[k]); }
+  return s;
+}
+
+// Apply translations to every tagged static node, the title, and <html lang>.
+function applyI18n() {
+  document.documentElement.lang = currentLang;
+  document.title = t('app.title');
+  document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.dataset.i18n); });
+  document.querySelectorAll('[data-i18n-html]').forEach(el => { el.innerHTML = t(el.dataset.i18nHtml); });
+  document.querySelectorAll('[data-i18n-ph]').forEach(el => { el.placeholder = t(el.dataset.i18nPh); });
+  document.querySelectorAll('[data-i18n-aria]').forEach(el => { el.setAttribute('aria-label', t(el.dataset.i18nAria)); });
+  document.querySelectorAll('[data-i18n-title]').forEach(el => { el.setAttribute('title', t(el.dataset.i18nTitle)); });
+}
+
+// ─── Translation strings ────────────────────────────────────────────────────
+// Each key: { en, vi, zh }. {n}-style placeholders are filled by t(key, params).
+const STR = {
+  'app.title':        { en: `Context Engine Settings`, vi: `Cài đặt Context Engine`, zh: `Context Engine 设置` },
+  'lang.select':      { en: `Select language`, vi: `Chọn ngôn ngữ`, zh: `选择语言` },
+  'theme.toggle':     { en: `Toggle dark mode`, vi: `Chuyển chế độ tối`, zh: `切换深色模式` },
+
+  // Common actions
+  'action.add':       { en: `Add`, vi: `Thêm`, zh: `添加` },
+  'action.retry':     { en: `Retry`, vi: `Thử lại`, zh: `重试` },
+  'action.dismiss':   { en: `Dismiss`, vi: `Bỏ qua`, zh: `忽略` },
+  'action.copy':      { en: `Copy`, vi: `Sao chép`, zh: `复制` },
+  'action.copied':    { en: `Copied`, vi: `Đã chép`, zh: `已复制` },
+  'action.run':       { en: `Run`, vi: `Chạy`, zh: `运行` },
+  'action.close':     { en: `Close`, vi: `Đóng`, zh: `关闭` },
+  'action.cancel':    { en: `Cancel`, vi: `Hủy`, zh: `取消` },
+  'action.refresh':   { en: `Refresh`, vi: `Làm mới`, zh: `刷新` },
+  'action.back':      { en: `← Back`, vi: `← Quay lại`, zh: `← 返回` },
+  'action.show':      { en: `Show`, vi: `Hiện`, zh: `显示` },
+  'action.hide':      { en: `Hide`, vi: `Ẩn`, zh: `隐藏` },
+  'action.remove':    { en: `Remove`, vi: `Xóa`, zh: `移除` },
+
+  'toast.saved':      { en: `Saved`, vi: `Đã lưu`, zh: `已保存` },
+
+  // Banners
+  'banner.version':   { en: `This config was written by a newer version of Context Engine. Upgrade the binary or replace <code class="font-mono">settings.json</code> with an older backup.`,
+                        vi: `Cấu hình này được tạo bởi phiên bản Context Engine mới hơn. Hãy nâng cấp ứng dụng hoặc thay <code class="font-mono">settings.json</code> bằng bản sao lưu cũ hơn.`,
+                        zh: `此配置由更新版本的 Context Engine 写入。请升级程序，或用较旧的备份替换 <code class="font-mono">settings.json</code>。` },
+  'defender.title':   { en: `Windows Defender is scanning indexed files`, vi: `Windows Defender đang quét các tệp được lập chỉ mục`, zh: `Windows Defender 正在扫描已索引的文件` },
+  'defender.desc':    { en: `Real-time protection slows indexing significantly. Add an exclusion for the data directory and process to fix this.`,
+                        vi: `Bảo vệ thời gian thực làm chậm việc lập chỉ mục đáng kể. Thêm ngoại lệ cho thư mục dữ liệu và tiến trình để khắc phục.`,
+                        zh: `实时保护会显著拖慢索引速度。为数据目录和进程添加排除项即可解决。` },
+  'defender.add':     { en: `Add exclusion`, vi: `Thêm ngoại lệ`, zh: `添加排除项` },
+  'defender.adding':  { en: `Adding…`, vi: `Đang thêm…`, zh: `正在添加…` },
+  'defender.failRetry': { en: `Failed — retry`, vi: `Thất bại — thử lại`, zh: `失败 — 重试` },
+
+  // Tabs
+  'tab.repos':        { en: `Repositories`, vi: `Kho mã`, zh: `仓库` },
+  'tab.mcp':          { en: `MCP`, vi: `MCP`, zh: `MCP` },
+  'tab.settings':     { en: `Settings`, vi: `Cài đặt`, zh: `设置` },
+
+  // Repositories
+  'repos.placeholder': { en: `/absolute/path/to/repo`, vi: `/đường/dẫn/tuyệt/đối/đến/repo`, zh: `/仓库/的/绝对/路径` },
+  'repos.warning':     { en: `Warning: path does not look absolute. It will still be saved.`, vi: `Cảnh báo: đường dẫn không giống đường dẫn tuyệt đối. Vẫn sẽ được lưu.`, zh: `警告：路径看起来不是绝对路径，但仍会被保存。` },
+  'repos.configured':  { en: `Configured repositories`, vi: `Kho mã đã cấu hình`, zh: `已配置的仓库` },
+  'repos.indexAll':    { en: `Index All`, vi: `Lập chỉ mục tất cả`, zh: `索引全部` },
+  'repos.cancelAll':   { en: `Cancel All`, vi: `Hủy tất cả`, zh: `全部取消` },
+  'repos.indexing':    { en: `Indexing…`, vi: `Đang lập chỉ mục…`, zh: `正在索引…` },
+  'repos.filter':      { en: `Filter repositories…`, vi: `Lọc kho mã…`, zh: `筛选仓库…` },
+  'repos.empty':       { en: `No repositories configured. Add an absolute path above.`, vi: `Chưa có kho mã nào. Thêm một đường dẫn tuyệt đối ở trên.`, zh: `尚未配置任何仓库。请在上方添加绝对路径。` },
+  'repos.noMatch':     { en: `No repositories match the filter.`, vi: `Không có kho mã nào khớp bộ lọc.`, zh: `没有符合筛选条件的仓库。` },
+
+  // Repo row
+  'repo.index':        { en: `Index`, vi: `Lập chỉ mục`, zh: `索引` },
+  'repo.queued':       { en: `Queued…`, vi: `Đang chờ…`, zh: `已排队…` },
+  'repo.cancelling':   { en: `Cancelling…`, vi: `Đang hủy…`, zh: `正在取消…` },
+  'repo.removing':     { en: `Removing…`, vi: `Đang xóa…`, zh: `正在移除…` },
+  'repo.removeIndex':  { en: `Remove Indexes`, vi: `Xóa chỉ mục`, zh: `移除索引` },
+  'repo.removeRepo':   { en: `Remove Repo`, vi: `Xóa kho mã`, zh: `移除仓库` },
+  'repo.notIndexed':   { en: `Not indexed`, vi: `Chưa lập chỉ mục`, zh: `未索引` },
+  'repo.error':        { en: `Error`, vi: `Lỗi`, zh: `错误` },
+  'repo.files':        { en: `{n} files`, vi: `{n} tệp`, zh: `{n} 个文件` },
+  'repo.removeIndexFail': { en: `Failed to remove indexes`, vi: `Xóa chỉ mục thất bại`, zh: `移除索引失败` },
+
+  // Settings — Embedding
+  'embed.heading':     { en: `Embedding Provider`, vi: `Nhà cung cấp Embedding`, zh: `嵌入向量提供商` },
+  'embed.model':       { en: `Embedding model`, vi: `Mô hình embedding`, zh: `嵌入模型` },
+  'embed.concurrency': { en: `Concurrent batches per key`, vi: `Số lô đồng thời mỗi khóa`, zh: `每个密钥的并发批次数` },
+  'field.provider':    { en: `Provider`, vi: `Nhà cung cấp`, zh: `提供商` },
+  'field.apiKeys':     { en: `API keys`, vi: `Khóa API`, zh: `API 密钥` },
+  'field.pasteKey':    { en: `Paste API key`, vi: `Dán khóa API`, zh: `粘贴 API 密钥` },
+  'cache.label':       { en: `Embedding Cache`, vi: `Bộ nhớ đệm Embedding`, zh: `嵌入缓存` },
+  'cache.allTime':     { en: `All time`, vi: `Toàn bộ`, zh: `全部时间` },
+  'cache.older30':     { en: `Older than 30 days`, vi: `Cũ hơn 30 ngày`, zh: `超过 30 天` },
+  'cache.clear':       { en: `Clear Cache`, vi: `Xóa bộ nhớ đệm`, zh: `清除缓存` },
+  'cache.clearing':    { en: `Clearing…`, vi: `Đang xóa…`, zh: `正在清除…` },
+  'cache.deleted':     { en: `Deleted {n} entries`, vi: `Đã xóa {n} mục`, zh: `已删除 {n} 条记录` },
+  'cache.failed':      { en: `Failed`, vi: `Thất bại`, zh: `失败` },
+
+  // Settings — LLM
+  'llm.heading':       { en: `LLM Keys`, vi: `Khóa LLM`, zh: `LLM 密钥` },
+  'llm.rerankModel':   { en: `Rerank model`, vi: `Mô hình rerank`, zh: `重排序模型` },
+  'llm.minPrune':      { en: `Min prune lines`, vi: `Số dòng tối thiểu để cắt`, zh: `最小裁剪行数` },
+  'llm.minPruneHelp':  { en: `Chunks smaller than this many lines are returned whole; larger ones may be narrowed to relevant line ranges.`,
+                         vi: `Các đoạn nhỏ hơn số dòng này được trả về nguyên vẹn; đoạn lớn hơn có thể được thu hẹp về các khoảng dòng liên quan.`,
+                         zh: `小于此行数的代码块将完整返回；较大的代码块可能被收窄到相关行范围。` },
+  'llm.structured':    { en: `Use structured output`, vi: `Dùng đầu ra có cấu trúc`, zh: `使用结构化输出` },
+  'llm.structuredHelp':{ en: `Request the provider's native JSON output for reranking instead of XML tags. Providers without a JSON mode fall back to the XML path automatically.`,
+                         vi: `Yêu cầu đầu ra JSON gốc của nhà cung cấp để rerank thay vì thẻ XML. Nhà cung cấp không hỗ trợ JSON sẽ tự động dùng đường XML.`,
+                         zh: `请求提供商的原生 JSON 输出用于重排序，而非 XML 标签。不支持 JSON 模式的提供商会自动回退到 XML 方式。` },
+  'settings.setupHint':{ en: `Add an embedding API key below to start indexing repositories.`, vi: `Thêm khóa API embedding bên dưới để bắt đầu lập chỉ mục kho mã.`, zh: `在下方添加嵌入 API 密钥即可开始索引仓库。` },
+
+  // MCP
+  'mcp.endpoint':      { en: `Endpoint`, vi: `Điểm cuối`, zh: `端点` },
+  'mcp.claudeCode':    { en: `Claude Code`, vi: `Claude Code`, zh: `Claude Code` },
+  'mcp.test':          { en: `Test`, vi: `Kiểm thử`, zh: `测试` },
+  'mcp.endpointDesc':  { en: `Streamable-HTTP MCP endpoint. Point any MCP-compatible client here.`, vi: `Điểm cuối MCP Streamable-HTTP. Trỏ bất kỳ client tương thích MCP nào tới đây.`, zh: `Streamable-HTTP MCP 端点。将任何兼容 MCP 的客户端指向此处。` },
+  'mcp.claudeCmdDesc': { en: `Run this command in your terminal to register the MCP server with Claude Code.`, vi: `Chạy lệnh này trong terminal để đăng ký MCP server với Claude Code.`, zh: `在终端中运行此命令，将 MCP 服务器注册到 Claude Code。` },
+  'mcp.claudeMdDesc':  { en: `Add the following to your project's <code class="font-mono text-xs px-1 py-0.5 rounded bg-gray-100 dark:bg-wiki-surface">CLAUDE.md</code> so Claude prefers the context engine for codebase exploration.`,
+                         vi: `Thêm nội dung sau vào <code class="font-mono text-xs px-1 py-0.5 rounded bg-gray-100 dark:bg-wiki-surface">CLAUDE.md</code> của dự án để Claude ưu tiên dùng context engine khi khám phá mã nguồn.`,
+                         zh: `将以下内容添加到项目的 <code class="font-mono text-xs px-1 py-0.5 rounded bg-gray-100 dark:bg-wiki-surface">CLAUDE.md</code>，让 Claude 在探索代码库时优先使用 context engine。` },
+  'mcp.testDesc':      { en: `Send a request directly to the MCP tool and see the raw output.`, vi: `Gửi yêu cầu trực tiếp đến công cụ MCP và xem đầu ra thô.`, zh: `直接向 MCP 工具发送请求并查看原始输出。` },
+  'mcp.testQueryPlaceholder': { en: `e.g. Where is authentication handled?`, vi: `vd. Xác thực được xử lý ở đâu?`, zh: `例如：身份验证在哪里处理？` },
+  'mcp.running':       { en: `Running…`, vi: `Đang chạy…`, zh: `运行中…` },
+  'mcp.custom':        { en: `Custom path…`, vi: `Đường dẫn tùy chỉnh…`, zh: `自定义路径…` },
+
+  // Repo detail — explorer & graph
+  'repo.explorer':     { en: `Index Explorer`, vi: `Trình khám phá chỉ mục`, zh: `索引浏览器` },
+  'repo.search':       { en: `Search`, vi: `Tìm kiếm`, zh: `搜索` },
+  'repo.rebuild':      { en: `Rebuild Index`, vi: `Xây lại chỉ mục`, zh: `重建索引` },
+  'repo.incremental':  { en: `Incremental Update`, vi: `Cập nhật tăng dần`, zh: `增量更新` },
+  'graph.heading':     { en: `Call graph`, vi: `Đồ thị lời gọi`, zh: `调用图` },
+  'graph.loading':     { en: `Loading call graph…`, vi: `Đang tải đồ thị lời gọi…`, zh: `正在加载调用图…` },
+  'graph.empty':       { en: `No call relationships in the index yet.`, vi: `Chưa có quan hệ lời gọi nào trong chỉ mục.`, zh: `索引中尚无调用关系。` },
+  'graph.nodesEdges':  { en: `{nodes} nodes · {edges} edges`, vi: `{nodes} nút · {edges} cạnh`, zh: `{nodes} 个节点 · {edges} 条边` },
+  'graph.capped':      { en: ` (capped)`, vi: ` (đã giới hạn)`, zh: `（已限量）` },
+  'graph.loadFail':    { en: `Failed to load: {msg}`, vi: `Tải thất bại: {msg}`, zh: `加载失败：{msg}` },
+  'graph.other':       { en: `Other`, vi: `Khác`, zh: `其他` },
+
+  // Files & chunks
+  'files.heading':     { en: `Indexed files`, vi: `Tệp đã lập chỉ mục`, zh: `已索引文件` },
+  'files.filter':      { en: `Filter files…`, vi: `Lọc tệp…`, zh: `筛选文件…` },
+  'files.empty':       { en: `No files indexed yet. Use Rebuild Index to build the index.`, vi: `Chưa có tệp nào được lập chỉ mục. Dùng "Xây lại chỉ mục" để tạo chỉ mục.`, zh: `尚未索引任何文件。使用"重建索引"来构建索引。` },
+  'files.noMatch':     { en: `No files match the filter.`, vi: `Không có tệp nào khớp bộ lọc.`, zh: `没有符合筛选条件的文件。` },
+  'files.truncated':   { en: `Showing the first {n} files. Use the filter to narrow down.`, vi: `Đang hiển thị {n} tệp đầu tiên. Dùng bộ lọc để thu hẹp.`, zh: `显示前 {n} 个文件。使用筛选器进一步缩小范围。` },
+  'files.loadFail':    { en: `Failed to load files: {msg}`, vi: `Tải tệp thất bại: {msg}`, zh: `加载文件失败：{msg}` },
+  'files.chunkOne':    { en: `{n} chunk`, vi: `{n} đoạn`, zh: `{n} 个代码块` },
+  'files.chunkMany':   { en: `{n} chunks`, vi: `{n} đoạn`, zh: `{n} 个代码块` },
+  'chunk.loading':     { en: `Loading chunks…`, vi: `Đang tải các đoạn…`, zh: `正在加载代码块…` },
+  'chunk.none':        { en: `No chunks stored for this file.`, vi: `Không có đoạn nào được lưu cho tệp này.`, zh: `此文件没有存储任何代码块。` },
+  'chunk.loadFail':    { en: `Failed to load chunks: {msg}`, vi: `Tải đoạn thất bại: {msg}`, zh: `加载代码块失败：{msg}` },
+  'chunk.noEmbed':     { en: `no embed`, vi: `chưa nhúng`, zh: `无嵌入` },
+  'chunk.callers':     { en: `Callers:`, vi: `Người gọi:`, zh: `调用者：` },
+  'chunk.callees':     { en: `Callees:`, vi: `Được gọi:`, zh: `被调用：` },
+
+  // Stat tiles
+  'stat.chunks':       { en: `Chunks`, vi: `Đoạn`, zh: `代码块` },
+  'stat.files':        { en: `Files`, vi: `Tệp`, zh: `文件` },
+  'stat.symbols':      { en: `Symbols`, vi: `Ký hiệu`, zh: `符号` },
+  'stat.embedModel':   { en: `Embedding model`, vi: `Mô hình embedding`, zh: `嵌入模型` },
+  'stat.embedDim':     { en: `Embedding dim`, vi: `Chiều embedding`, zh: `嵌入维度` },
+  'stat.status':       { en: `Status`, vi: `Trạng thái`, zh: `状态` },
+  'stat.lastIndexed':  { en: `Last indexed`, vi: `Lập chỉ mục lần cuối`, zh: `上次索引` },
+  'stat.dbPath':       { en: `Index DB path`, vi: `Đường dẫn DB chỉ mục`, zh: `索引数据库路径` },
+  'stat.statusUpToDate': { en: `Up to date`, vi: `Đã cập nhật`, zh: `已是最新` },
+  'stat.statusIndexing': { en: `Indexing…`, vi: `Đang lập chỉ mục…`, zh: `正在索引…` },
+  'stat.statusError':  { en: `Error`, vi: `Lỗi`, zh: `错误` },
+  'stat.loadFail':     { en: `Failed to load stats: {msg}`, vi: `Tải thống kê thất bại: {msg}`, zh: `加载统计信息失败：{msg}` },
+
+  // Search results & explorer actions
+  'search.placeholder':{ en: `Search this repository…`, vi: `Tìm trong kho mã này…`, zh: `在此仓库中搜索…` },
+  'search.searching':  { en: `Searching…`, vi: `Đang tìm…`, zh: `搜索中…` },
+  'search.tabResults': { en: `Results`, vi: `Kết quả`, zh: `结果` },
+  'search.tabPrererank': { en: `Pre-rerank`, vi: `Trước rerank`, zh: `重排序前` },
+  'search.tabLlmReq':  { en: `LLM Request`, vi: `Yêu cầu LLM`, zh: `LLM 请求` },
+  'search.tabLlmResp': { en: `LLM Response`, vi: `Phản hồi LLM`, zh: `LLM 响应` },
+  'search.noResults':  { en: `No results found.`, vi: `Không tìm thấy kết quả.`, zh: `未找到结果。` },
+  'search.noLlmReq':   { en: `No LLM request available.`, vi: `Không có yêu cầu LLM.`, zh: `没有可用的 LLM 请求。` },
+  'search.noLlmResp':  { en: `No LLM response available.`, vi: `Không có phản hồi LLM.`, zh: `没有可用的 LLM 响应。` },
+  'search.rerankSkip': { en: `Rerank: skipped — {reason}`, vi: `Rerank: bỏ qua — {reason}`, zh: `重排序：已跳过 — {reason}` },
+  'search.rerankFallback': { en: `Rerank: fallback — {reason}`, vi: `Rerank: dự phòng — {reason}`, zh: `重排序：回退 — {reason}` },
+  'explorer.rebuildQueued': { en: `Full rebuild queued…`, vi: `Đã xếp hàng xây lại toàn bộ…`, zh: `完整重建已排队…` },
+  'explorer.incQueued': { en: `Incremental update queued…`, vi: `Đã xếp hàng cập nhật tăng dần…`, zh: `增量更新已排队…` },
+  'explorer.indexingN': { en: `Indexing… {indexed} / {total} files`, vi: `Đang lập chỉ mục… {indexed} / {total} tệp`, zh: `正在索引… {indexed} / {total} 个文件` },
+  'explorer.indexFailed': { en: `Indexing failed`, vi: `Lập chỉ mục thất bại`, zh: `索引失败` },
+  'explorer.indexUpdated': { en: `Index updated`, vi: `Đã cập nhật chỉ mục`, zh: `索引已更新` },
+  'explorer.actionFailed': { en: `Failed: {msg}`, vi: `Thất bại: {msg}`, zh: `失败：{msg}` },
+
+  // Errors
+  'err.network':       { en: `Network error: {msg}`, vi: `Lỗi mạng: {msg}`, zh: `网络错误：{msg}` },
+  'err.networkShort':  { en: `Network error`, vi: `Lỗi mạng`, zh: `网络错误` },
+  'err.saveFail':      { en: `Save failed (HTTP {status})`, vi: `Lưu thất bại (HTTP {status})`, zh: `保存失败（HTTP {status}）` },
+  'err.loadFail':      { en: `Load failed (HTTP {status})`, vi: `Tải thất bại (HTTP {status})`, zh: `加载失败（HTTP {status}）` },
+  'err.searchFail':    { en: `Search failed (HTTP {status})`, vi: `Tìm kiếm thất bại (HTTP {status})`, zh: `搜索失败（HTTP {status}）` },
+  'err.requestFail':   { en: `Request failed (HTTP {status})`, vi: `Yêu cầu thất bại (HTTP {status})`, zh: `请求失败（HTTP {status}）` },
+  'err.serverUnreachable': { en: `Could not reach server: {msg}`, vi: `Không thể kết nối máy chủ: {msg}`, zh: `无法连接服务器：{msg}` },
+
+  // Modal & language picker
+  'modal.indexProgress': { en: `Indexing Progress`, vi: `Tiến trình lập chỉ mục`, zh: `索引进度` },
+  'lang.pickerTitle':  { en: `Choose your language`, vi: `Chọn ngôn ngữ của bạn`, zh: `选择您的语言` },
+
+
+};
+
+
+// ─── i18n runtime: switcher, first-run picker, init ─────────────────────────
+function renderLangFlag() {
+  const el = document.getElementById('lang-current-flag');
+  if (el) el.innerHTML = FLAGS[currentLang] || FLAGS.en;
+}
+
+// Re-render dynamic (JS-built) UI after a language change. Static nodes are
+// handled by applyI18n(); these are the views rendered from data.
+function refreshDynamicI18n() {
+  if (cfg) renderAll();
+  initMcpUrls();
+  if (currentSearchRepo && !document.getElementById('search-page').classList.contains('hidden')) {
+    if (!document.getElementById('subpanel-explorer').classList.contains('hidden')) loadExplorer();
+  }
+  updateRepoIndexUI();
+}
+
+function setLang(lang, persist) {
+  if (!LANGS.includes(lang)) lang = 'en';
+  currentLang = lang;
+  if (persist) localStorage.setItem('lang', lang);
+  applyI18n();
+  renderLangFlag();
+  renderLangMenu();
+  refreshDynamicI18n();
+}
+
+// Build the header dropdown (flag + native name + check on current).
+function renderLangMenu() {
+  const menu = document.getElementById('lang-menu');
+  if (!menu) return;
+  menu.innerHTML = '';
+  LANGS.forEach(lang => {
+    const btn = document.createElement('button');
+    btn.className = 'w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left text-gray-700 dark:text-wiki-text hover:bg-gray-100 dark:hover:bg-wiki-bg focus:outline-none focus:ring-2 focus:ring-blue-400';
+    btn.innerHTML =
+      '<span class="block w-5 h-3.5 rounded-sm overflow-hidden border border-black/10 dark:border-white/10 shrink-0">' + FLAGS[lang] + '</span>' +
+      '<span class="flex-1">' + LANG_NAMES[lang] + '</span>' +
+      (lang === currentLang ? '<span class="text-blue-600 dark:text-wiki-link">✓</span>' : '');
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      menu.classList.add('hidden');
+      setLang(lang, true);
+    });
+    menu.appendChild(btn);
+  });
+}
+
+document.getElementById('btn-lang').addEventListener('click', (e) => {
+  e.stopPropagation();
+  document.getElementById('lang-menu').classList.toggle('hidden');
+});
+
+// First-run picker: shown only when no language is stored yet.
+function showLangPicker() {
+  const modal = document.getElementById('modal-lang-picker');
+  const opts = document.getElementById('lang-picker-options');
+  opts.innerHTML = '';
+  LANGS.forEach(lang => {
+    const btn = document.createElement('button');
+    btn.className = 'w-full flex items-center gap-3 px-4 py-3 rounded border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-bg hover:border-blue-400 dark:hover:border-wiki-border-active hover:bg-gray-50 dark:hover:bg-wiki-surface focus:outline-none focus:ring-2 focus:ring-blue-400 transition-colors';
+    btn.innerHTML =
+      '<span class="block w-7 h-5 rounded-sm overflow-hidden border border-black/10 dark:border-white/10 shrink-0">' + FLAGS[lang] + '</span>' +
+      '<span class="text-sm text-gray-900 dark:text-wiki-text">' + LANG_NAMES[lang] + '</span>';
+    btn.addEventListener('click', () => {
+      modal.classList.add('hidden');
+      setLang(lang, true);
+    });
+    opts.appendChild(btn);
+  });
+  modal.classList.remove('hidden');
+}
+
+// Boot the locale: stored → apply silently; unset → English now, then prompt.
+function initI18n() {
+  const stored = localStorage.getItem('lang');
+  if (stored && LANGS.includes(stored)) {
+    setLang(stored, false);
+  } else {
+    setLang('en', false);
+    showLangPicker();
+  }
+}
+// initI18n() is invoked from the Init section, after all referenced
+// declarations (currentSearchRepo et al.) are initialized — avoids a TDZ hit.
+
+
 
 // ─── Base64url encode for repo_id ─────────────────────────────────────────
 function encodeRepoId(path) {
@@ -758,28 +1108,28 @@ function updateRepoIndexUI() {
             '<span class="text-xs text-gray-400 dark:text-wiki-text-muted">' + s.indexed_files + ' / ' + s.total_files + ' (' + pct + '%)</span>' +
           '</span>';
       } else {
-        statusEl.innerHTML = '<span class="animate-pulse text-blue-500 dark:text-wiki-link">Indexing…</span>';
+        statusEl.innerHTML = '<span class="animate-pulse text-blue-500 dark:text-wiki-link">' + escHtml(t('repos.indexing')) + '</span>';
       }
       btnEl.disabled = false;
-      btnEl.textContent = 'Cancel';
+      btnEl.textContent = t('action.cancel');
       btnEl.classList.add('cancel-state');
       if (showBtn) showBtn.classList.remove('hidden');
     } else if (s.state === 'error') {
-      statusEl.innerHTML = '<span class="text-red-500 dark:text-red-400" title="' + escHtml(s.error || '') + '">Error</span>';
+      statusEl.innerHTML = '<span class="text-red-500 dark:text-red-400" title="' + escHtml(s.error || '') + '">' + escHtml(t('repo.error')) + '</span>';
       btnEl.disabled = false;
-      btnEl.textContent = 'Index';
+      btnEl.textContent = t('repo.index');
       btnEl.classList.remove('cancel-state');
       if (showBtn) showBtn.classList.add('hidden');
     } else {
       const count = s.indexed_files || 0;
       if (count > 0) {
-        statusEl.textContent = count + ' files';
+        statusEl.textContent = t('repo.files', { n: count });
       } else {
-        statusEl.textContent = 'Not indexed';
+        statusEl.textContent = t('repo.notIndexed');
         statusEl.className += ' italic';
       }
       btnEl.disabled = false;
-      btnEl.textContent = 'Index';
+      btnEl.textContent = t('repo.index');
       btnEl.classList.remove('cancel-state');
       if (showBtn) showBtn.classList.add('hidden');
     }
@@ -791,7 +1141,7 @@ function updateIndexAllButton() {
   const btn = document.getElementById('btn-index-all');
   if (!btn) return;
   const anyIndexing = Object.values(indexStatuses).some(s => s.state === 'indexing');
-  btn.textContent = anyIndexing ? 'Cancel All' : 'Index All';
+  btn.textContent = anyIndexing ? t('repos.cancelAll') : t('repos.indexAll');
   btn.classList.toggle('cancel-state', anyIndexing);
 }
 
@@ -893,21 +1243,21 @@ function renderRepos() {
                      text-gray-600 dark:text-wiki-text-muted hover:bg-gray-100 dark:hover:bg-wiki-surface/60
                      hover:text-gray-900 dark:hover:text-wiki-text
                      focus:outline-none focus:ring-2 focus:ring-blue-400">
-        Show
+        ${escHtml(t('action.show'))}
       </button>
       <button id="repo-index-btn-${repoId}" data-repo="${escHtml(repo)}"
               class="btn-index-repo text-xs px-2 py-1 rounded border border-gray-300 dark:border-wiki-border
                      text-gray-600 dark:text-wiki-text-muted hover:bg-gray-100 dark:hover:bg-wiki-surface/60
                      hover:text-gray-900 dark:hover:text-wiki-text
                      focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-40 disabled:cursor-not-allowed">
-        Index
+        ${escHtml(t('repo.index'))}
       </button>
       <div class="relative">
         <button data-idx="${idx}" class="btn-remove-toggle text-gray-400 dark:text-wiki-text-muted hover:text-red-500 dark:hover:text-red-400 text-xs
-                focus:outline-none focus:ring-2 focus:ring-red-300 rounded px-2 py-1">Remove</button>
+                focus:outline-none focus:ring-2 focus:ring-red-300 rounded px-2 py-1">${escHtml(t('action.remove'))}</button>
         <div data-idx="${idx}" class="remove-dropdown hidden absolute right-0 top-full mt-1 z-50 min-w-[140px] border border-gray-200 dark:border-wiki-border rounded bg-white dark:bg-wiki-surface shadow-lg py-1">
-          <button data-repo="${escHtml(repo)}" class="btn-remove-index w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-wiki-text hover:bg-gray-100 dark:hover:bg-wiki-bg">Remove Indexes</button>
-          <button data-idx="${idx}" class="btn-remove-repo w-full text-left px-3 py-1.5 text-xs text-red-600 dark:text-red-400 hover:bg-gray-100 dark:hover:bg-wiki-bg">Remove Repo</button>
+          <button data-repo="${escHtml(repo)}" class="btn-remove-index w-full text-left px-3 py-1.5 text-xs text-gray-700 dark:text-wiki-text hover:bg-gray-100 dark:hover:bg-wiki-bg">${escHtml(t('repo.removeIndex'))}</button>
+          <button data-idx="${idx}" class="btn-remove-repo w-full text-left px-3 py-1.5 text-xs text-red-600 dark:text-red-400 hover:bg-gray-100 dark:hover:bg-wiki-bg">${escHtml(t('repo.removeRepo'))}</button>
         </div>
       </div>
     `;
@@ -933,7 +1283,7 @@ function renderRepos() {
       const s = indexStatuses[repo];
       if (s && s.state === 'indexing') {
         btn.disabled = true;
-        btn.textContent = 'Cancelling…';
+        btn.textContent = t('repo.cancelling');
         try {
           await fetch('/api/repos/' + repoId + '/cancel-index', { method: 'POST' });
           await pollIndexStatus();
@@ -943,12 +1293,12 @@ function renderRepos() {
       }
       btn.disabled = true;
       const statusEl = document.getElementById('repo-status-' + repoId);
-      if (statusEl) statusEl.innerHTML = '<span class="animate-pulse text-blue-500 dark:text-wiki-link">Queued…</span>';
+      if (statusEl) statusEl.innerHTML = '<span class="animate-pulse text-blue-500 dark:text-wiki-link">' + escHtml(t('repo.queued')) + '</span>';
       try {
         await fetch('/api/repos/' + repoId + '/index', { method: 'POST' });
         await pollIndexStatus();
       } catch (e) {
-        if (statusEl) statusEl.innerHTML = '<span class="text-red-500">Error</span>';
+        if (statusEl) statusEl.innerHTML = '<span class="text-red-500">' + escHtml(t('repo.error')) + '</span>';
         btn.disabled = false;
       }
     });
@@ -969,18 +1319,18 @@ function renderRepos() {
       e.stopPropagation();
       const repo = btn.dataset.repo;
       const repoId = encodeRepoId(repo);
-      btn.textContent = 'Removing…';
+      btn.textContent = t('repo.removing');
       btn.disabled = true;
       try {
         const res = await fetch('/api/repos/' + repoId + '/index', { method: 'DELETE' });
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
-          showError(data.error || 'Failed to remove indexes');
+          showError(data.error || t('repo.removeIndexFail'));
         }
       } catch (err) {
-        showError('Network error: ' + err.message);
+        showError(t('err.network', { msg: err.message }));
       } finally {
-        btn.textContent = 'Remove Indexes';
+        btn.textContent = t('repo.removeIndex');
         btn.disabled = false;
         btn.closest('.remove-dropdown').classList.add('hidden');
       }
@@ -1013,15 +1363,15 @@ function renderKeyList(containerId, keys, onRemove) {
     display.textContent = maskKey(key);
     let revealed = false;
     const showBtn = document.createElement('button');
-    showBtn.textContent = 'Show';
+    showBtn.textContent = t('action.show');
     showBtn.className = 'text-xs text-gray-400 dark:text-wiki-text-muted hover:text-gray-700 dark:hover:text-wiki-link focus:outline-none focus:ring-2 focus:ring-blue-300 rounded px-2 py-1';
     showBtn.addEventListener('click', () => {
       revealed = !revealed;
       display.textContent = revealed ? key : maskKey(key);
-      showBtn.textContent = revealed ? 'Hide' : 'Show';
+      showBtn.textContent = revealed ? t('action.hide') : t('action.show');
     });
     const removeBtn = document.createElement('button');
-    removeBtn.textContent = 'Remove';
+    removeBtn.textContent = t('action.remove');
     removeBtn.className = 'text-xs text-gray-400 dark:text-wiki-text-muted hover:text-red-500 dark:hover:text-red-400 focus:outline-none focus:ring-2 focus:ring-red-300 rounded px-2 py-1';
     removeBtn.addEventListener('click', () => { onRemove(idx); });
     row.appendChild(display);
@@ -1070,13 +1420,13 @@ async function saveNow() {
     if (res.status === 409) { showVersionBanner(); return; }
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      showError(data.error || `Save failed (HTTP ${res.status})`);
+      showError(data.error || t('err.saveFail', { status: res.status }));
       return;
     }
     cfg = await res.json();
     showToast();
   } catch (err) {
-    showError('Network error: ' + err.message);
+    showError(t('err.network', { msg: err.message }));
   }
 }
 
@@ -1107,7 +1457,7 @@ async function loadConfig() {
     if (res.status === 409) { showVersionBanner(); return; }
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      showError(data.error || `Load failed (HTTP ${res.status})`);
+      showError(data.error || t('err.loadFail', { status: res.status }));
       document.getElementById('skeleton').classList.add('hidden');
       document.getElementById('main-content').classList.remove('hidden');
       return;
@@ -1120,7 +1470,7 @@ async function loadConfig() {
   } catch (err) {
     document.getElementById('skeleton').classList.add('hidden');
     document.getElementById('main-content').classList.remove('hidden');
-    showError('Could not reach server: ' + err.message);
+    showError(t('err.serverUnreachable', { msg: err.message }));
   }
 }
 
@@ -1217,25 +1567,25 @@ document.getElementById('btn-purge-cache').addEventListener('click', async () =>
   const status = document.getElementById('cache-purge-status');
   const scope = document.getElementById('cache-purge-scope').value;
   btn.disabled = true;
-  btn.textContent = 'Clearing…';
+  btn.textContent = t('cache.clearing');
   status.textContent = '';
   try {
     const res = await fetch('/api/embedding-cache?older_than=' + encodeURIComponent(scope), { method: 'DELETE' });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      status.textContent = data.error || 'Failed';
+      status.textContent = data.error || t('cache.failed');
       status.className = 'text-xs text-red-500 dark:text-red-400';
     } else {
       const data = await res.json();
-      status.textContent = 'Deleted ' + data.deleted.toLocaleString() + ' entries';
+      status.textContent = t('cache.deleted', { n: data.deleted.toLocaleString() });
       status.className = 'text-xs text-green-600 dark:text-green-400';
     }
   } catch (e) {
-    status.textContent = 'Network error';
+    status.textContent = t('err.networkShort');
     status.className = 'text-xs text-red-500 dark:text-red-400';
   }
   btn.disabled = false;
-  btn.textContent = 'Clear Cache';
+  btn.textContent = t('cache.clear');
   setTimeout(() => { status.textContent = ''; }, 5000);
 });
 
@@ -1330,7 +1680,7 @@ function initMcpWorkspaceChoices() {
   });
   const customOpt = document.createElement('option');
   customOpt.value = '__custom__';
-  customOpt.textContent = 'Custom path…';
+  customOpt.textContent = t('mcp.custom');
   sel.appendChild(customOpt);
 
   // Restore previous selection if still valid, otherwise default.
@@ -1399,7 +1749,7 @@ function makeCopyBtn(btnId, getTextFn) {
     const btn = document.getElementById(btnId);
     navigator.clipboard.writeText(getTextFn()).then(() => {
       const orig = btn.textContent;
-      btn.textContent = 'Copied';
+      btn.textContent = t('action.copied');
       setTimeout(() => { btn.textContent = orig; }, 1500);
     }).catch(() => {});
   });
@@ -1422,7 +1772,7 @@ async function runMcpTest() {
   errorEl.classList.add('hidden');
   outputEl.classList.add('hidden');
   btn.disabled = true;
-  btn.textContent = 'Running…';
+  btn.textContent = t('mcp.running');
 
   try {
     const res = await fetch('/api/mcp-tool', {
@@ -1432,18 +1782,18 @@ async function runMcpTest() {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      errorEl.textContent = data.error || 'Request failed (HTTP ' + res.status + ')';
+      errorEl.textContent = data.error || t('err.requestFail', { status: res.status });
       errorEl.classList.remove('hidden');
       return;
     }
     outputEl.textContent = data.result ?? '';
     outputEl.classList.remove('hidden');
   } catch (err) {
-    errorEl.textContent = 'Network error: ' + err.message;
+    errorEl.textContent = t('err.network', { msg: err.message });
     errorEl.classList.remove('hidden');
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Run';
+    btn.textContent = t('action.run');
   }
 }
 document.getElementById('btn-mcp-run').addEventListener('click', runMcpTest);
@@ -1491,7 +1841,7 @@ async function runSearch() {
 
   const token = ++searchToken;
   btn.disabled = true;
-  btn.textContent = 'Searching…';
+  btn.textContent = t('search.searching');
   errorEl.classList.add('hidden');
   resultsEl.innerHTML = '';
   emptyEl.classList.add('hidden');
@@ -1509,7 +1859,7 @@ async function runSearch() {
     const data = await res.json();
     if (token !== searchToken) return;   // a newer search or a reset superseded this one
     if (!res.ok) {
-      errorEl.textContent = data.error || `Search failed (HTTP ${res.status})`;
+      errorEl.textContent = data.error || t('err.searchFail', { status: res.status });
       errorEl.classList.remove('hidden');
       return;
     }
@@ -1555,9 +1905,9 @@ async function runSearch() {
     if (data.rerank) {
       let badgeText = '';
       if (data.rerank.skip_reason && !data.rerank.fallback_used && data.rerank.raw_response === '') {
-        badgeText = 'Rerank: skipped — ' + data.rerank.skip_reason;
+        badgeText = t('search.rerankSkip', { reason: data.rerank.skip_reason });
       } else if (data.rerank.fallback_used) {
-        badgeText = 'Rerank: fallback — ' + (data.rerank.skip_reason || 'unknown reason');
+        badgeText = t('search.rerankFallback', { reason: data.rerank.skip_reason || 'unknown reason' });
       }
       if (badgeText) {
         badgeEl.textContent = badgeText;
@@ -1580,12 +1930,12 @@ async function runSearch() {
     }
   } catch (err) {
     if (token !== searchToken) return;   // stale failure — don't overwrite a newer search
-    errorEl.textContent = 'Network error: ' + err.message;
+    errorEl.textContent = t('err.network', { msg: err.message });
     errorEl.classList.remove('hidden');
   } finally {
     if (token === searchToken) {   // only the current search owns the button state
       btn.disabled = false;
-      btn.textContent = 'Search';
+      btn.textContent = t('repo.search');
     }
   }
 }
@@ -1792,24 +2142,24 @@ async function loadExplorerStats(token) {
     if (token !== explorerLoadToken) return;   // superseded by a later load/reset
     if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
     const status = indexStatuses[currentSearchRepo];
-    const staleLabel = status && status.state === 'indexing' ? 'Indexing…'
-      : status && status.state === 'error' ? 'Error'
-      : 'Up to date';
+    const staleLabel = status && status.state === 'indexing' ? t('stat.statusIndexing')
+      : status && status.state === 'error' ? t('stat.statusError')
+      : t('stat.statusUpToDate');
     box.innerHTML =
-      statCell('Chunks', String(data.chunks ?? 0)) +
-      statCell('Files', String(data.files ?? 0)) +
-      statCell('Symbols', String(data.symbols ?? 0)) +
-      statCell('Embedding model', data.embedding_model || '—', { mono: true, title: data.embedding_model }) +
-      statCell('Embedding dim', data.embedding_dim ? String(data.embedding_dim) : '—') +
-      statCell('Status', staleLabel) +
-      statCell('Last indexed', fmtTime(data.last_indexed_at)) +
+      statCell(t('stat.chunks'), String(data.chunks ?? 0)) +
+      statCell(t('stat.files'), String(data.files ?? 0)) +
+      statCell(t('stat.symbols'), String(data.symbols ?? 0)) +
+      statCell(t('stat.embedModel'), data.embedding_model || '—', { mono: true, title: data.embedding_model }) +
+      statCell(t('stat.embedDim'), data.embedding_dim ? String(data.embedding_dim) : '—') +
+      statCell(t('stat.status'), staleLabel) +
+      statCell(t('stat.lastIndexed'), fmtTime(data.last_indexed_at)) +
       '<div class="bg-white dark:bg-wiki-surface px-3 py-2 col-span-2 sm:col-span-3">' +
-        '<div class="text-[11px] uppercase tracking-wide text-gray-400 dark:text-wiki-text-muted">Index DB path</div>' +
+        '<div class="text-[11px] uppercase tracking-wide text-gray-400 dark:text-wiki-text-muted">' + escHtml(t('stat.dbPath')) + '</div>' +
         '<div class="text-xs text-gray-700 dark:text-wiki-text font-mono truncate select-all" title="' + escHtml(data.db_path || '') + '">' + escHtml(data.db_path || '—') + '</div>' +
       '</div>';
   } catch (e) {
     if (token !== explorerLoadToken) return;   // stale failure — don't overwrite current view
-    box.innerHTML = '<div class="bg-white dark:bg-wiki-surface px-3 py-2 col-span-2 sm:col-span-3 text-sm text-red-500 dark:text-red-400">Failed to load stats: ' + escHtml(e.message) + '</div>';
+    box.innerHTML = '<div class="bg-white dark:bg-wiki-surface px-3 py-2 col-span-2 sm:col-span-3 text-sm text-red-500 dark:text-red-400">' + escHtml(t('stat.loadFail', { msg: e.message })) + '</div>';
   }
 }
 
@@ -1831,7 +2181,7 @@ async function loadExplorerFiles(token) {
     explorerFiles = data.files || [];
     truncEl.className = 'text-amber-600 dark:text-amber-400 text-xs mt-2';
     truncEl.classList.toggle('hidden', !data.truncated);
-    if (data.truncated) truncEl.textContent = 'Showing the first ' + explorerFiles.length + ' files. Use the filter to narrow down.';
+    if (data.truncated) truncEl.textContent = t('files.truncated', { n: explorerFiles.length });
     renderFiles();
   } catch (e) {
     if (token !== explorerLoadToken) return;   // stale failure — don't overwrite current view
@@ -1839,7 +2189,7 @@ async function loadExplorerFiles(token) {
     emptyEl.classList.add('hidden');
     truncEl.classList.remove('hidden');
     truncEl.className = 'text-red-500 dark:text-red-400 text-xs mt-2';
-    truncEl.textContent = 'Failed to load files: ' + e.message;
+    truncEl.textContent = t('files.loadFail', { msg: e.message });
   }
 }
 
@@ -1879,7 +2229,7 @@ function renderFiles() {
       '<span class="inline-block w-2 h-2 rounded-full flex-none" style="background:' + langColor(f.path) + '"></span>' +
       '<span class="font-mono text-gray-800 dark:text-wiki-text truncate flex-1" title="' + escHtml(f.path) + '">' + escHtml(relPath(f.path)) + '</span>' +
       '<span class="text-xs text-gray-400 dark:text-wiki-text-muted whitespace-nowrap">' + (LANG_LABELS[ext] || ext || '—') + '</span>' +
-      '<span class="text-xs text-gray-400 dark:text-wiki-text-muted whitespace-nowrap">' + f.chunks + ' ' + (f.chunks === 1 ? 'chunk' : 'chunks') + '</span>' +
+      '<span class="text-xs text-gray-400 dark:text-wiki-text-muted whitespace-nowrap">' + (f.chunks === 1 ? t('files.chunkOne', { n: f.chunks }) : t('files.chunkMany', { n: f.chunks })) + '</span>' +
       '<span class="text-xs text-gray-400 dark:text-wiki-text-muted whitespace-nowrap hidden sm:inline">' + fmtBytes(f.size) + '</span>';
     row.addEventListener('click', () => openChunkDetail(f.path));
     listEl.appendChild(row);
@@ -1888,7 +2238,7 @@ function renderFiles() {
   if (shown.length === 0) {
     const none = document.createElement('div');
     none.className = 'px-3 py-2 text-sm text-gray-400 dark:text-wiki-text-muted';
-    none.textContent = 'No files match the filter.';
+    none.textContent = t('files.noMatch');
     listEl.appendChild(none);
   }
 }
@@ -1907,7 +2257,7 @@ async function openChunkDetail(file) {
   const neighbors = document.getElementById('chunk-detail-neighbors');
   panel.classList.remove('hidden');
   title.textContent = relPath(file);
-  body.innerHTML = '<div class="px-3 py-2 text-sm text-gray-400 dark:text-wiki-text-muted animate-pulse">Loading chunks…</div>';
+  body.innerHTML = '<div class="px-3 py-2 text-sm text-gray-400 dark:text-wiki-text-muted animate-pulse">' + escHtml(t('chunk.loading')) + '</div>';
   neighbors.classList.add('hidden');
   panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
@@ -1922,7 +2272,7 @@ async function openChunkDetail(file) {
     renderChunkDetail(file, data.chunks || []);
   } catch (e) {
     if (token !== chunkLoadToken) return;   // stale failure — don't overwrite current chunk view
-    body.innerHTML = '<div class="px-3 py-2 text-sm text-red-500 dark:text-red-400">Failed to load chunks: ' + escHtml(e.message) + '</div>';
+    body.innerHTML = '<div class="px-3 py-2 text-sm text-red-500 dark:text-red-400">' + escHtml(t('chunk.loadFail', { msg: e.message })) + '</div>';
   }
 }
 
@@ -1930,7 +2280,7 @@ function renderChunkDetail(file, chunks) {
   const body = document.getElementById('chunk-detail-body');
   body.innerHTML = '';
   if (chunks.length === 0) {
-    body.innerHTML = '<div class="px-3 py-2 text-sm text-gray-400 dark:text-wiki-text-muted">No chunks stored for this file.</div>';
+    body.innerHTML = '<div class="px-3 py-2 text-sm text-gray-400 dark:text-wiki-text-muted">' + escHtml(t('chunk.none')) + '</div>';
     return;
   }
   chunks.forEach((c) => {
@@ -1942,7 +2292,7 @@ function renderChunkDetail(file, chunks) {
     loc.textContent = relPath(file) + '#L' + c.line_start + '-' + c.line_end + (c.symbol ? '  ·  ' + c.symbol : '');
     const dim = document.createElement('span');
     dim.className = 'text-xs px-2 py-0.5 rounded-full bg-blue-100 dark:bg-wiki-border text-blue-700 dark:text-wiki-link whitespace-nowrap';
-    dim.textContent = c.embedding_dim ? c.embedding_dim + 'd' : 'no embed';
+    dim.textContent = c.embedding_dim ? c.embedding_dim + 'd' : t('chunk.noEmbed');
     head.appendChild(loc);
     head.appendChild(dim);
     const pre = document.createElement('pre');
@@ -1970,8 +2320,8 @@ function renderChunkNeighbors(file) {
   if (callers.size === 0 && callees.size === 0) { el.classList.add('hidden'); return; }
   const fmt = (set) => [...set].slice(0, 12).map(escHtml).join(', ') + (set.size > 12 ? ' …' : '');
   el.innerHTML =
-    (callers.size ? '<div><span class="text-gray-400 dark:text-wiki-text-muted">Callers:</span> ' + fmt(callers) + '</div>' : '') +
-    (callees.size ? '<div><span class="text-gray-400 dark:text-wiki-text-muted">Callees:</span> ' + fmt(callees) + '</div>' : '');
+    (callers.size ? '<div><span class="text-gray-400 dark:text-wiki-text-muted">' + escHtml(t('chunk.callers')) + '</span> ' + fmt(callers) + '</div>' : '') +
+    (callees.size ? '<div><span class="text-gray-400 dark:text-wiki-text-muted">' + escHtml(t('chunk.callees')) + '</span> ' + fmt(callees) + '</div>' : '');
   el.classList.remove('hidden');
 }
 
@@ -2022,14 +2372,14 @@ async function loadExplorerGraph(token) {
     if (loadingEl) loadingEl.classList.add('hidden');
     if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
     graphData = { nodes: data.nodes || [], edges: data.edges || [] };
-    metaEl.textContent = graphData.nodes.length + ' nodes · ' + graphData.edges.length + ' edges' +
-      (data.truncated ? ' (capped)' : '');
+    metaEl.textContent = t('graph.nodesEdges', { nodes: graphData.nodes.length, edges: graphData.edges.length }) +
+      (data.truncated ? t('graph.capped') : '');
     renderGraph();
     renderGraphLegend();
   } catch (e) {
     if (token !== explorerLoadToken) return;   // stale failure — don't overwrite the current view
     if (loadingEl) loadingEl.classList.add('hidden');
-    metaEl.textContent = 'Failed to load: ' + e.message;
+    metaEl.textContent = t('graph.loadFail', { msg: e.message });
   }
 }
 
@@ -2043,7 +2393,7 @@ function renderGraphLegend() {
       '<span class="inline-block w-2.5 h-2.5 rounded-full" style="background:' + LANG_COLORS[k] + '"></span>' +
       LANG_LABELS[k] + '</span>'
   ).join('') + (exts.has('') || entries.length < exts.size
-    ? '<span class="inline-flex items-center gap-1.5"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:' + DEFAULT_NODE_COLOR + '"></span>Other</span>'
+    ? '<span class="inline-flex items-center gap-1.5"><span class="inline-block w-2.5 h-2.5 rounded-full" style="background:' + DEFAULT_NODE_COLOR + '"></span>' + escHtml(t('graph.other')) + '</span>'
     : '');
 }
 
@@ -2247,11 +2597,11 @@ function attachDrag(svg, g, i, sim, r, circle, label, lineEls, links, nodes, rad
 // ─── Toolbar actions ────────────────────────────────────────────────────────
 document.getElementById('btn-rebuild').addEventListener('click', async () => {
   if (!currentSearchRepo) return;
-  await triggerIndexAction('/rebuild', 'Rebuild Index', 'btn-rebuild', 'Full rebuild queued…');
+  await triggerIndexAction('/rebuild', 'Rebuild Index', 'btn-rebuild', t('explorer.rebuildQueued'));
 });
 document.getElementById('btn-incremental').addEventListener('click', async () => {
   if (!currentSearchRepo) return;
-  await triggerIndexAction('/index', 'Incremental Update', 'btn-incremental', 'Incremental update queued…');
+  await triggerIndexAction('/index', 'Incremental Update', 'btn-incremental', t('explorer.incQueued'));
 });
 document.getElementById('btn-explorer-refresh').addEventListener('click', () => loadExplorer());
 
@@ -2269,7 +2619,7 @@ async function triggerIndexAction(suffix, label, btnId, queuedMsg) {
     await pollIndexStatus();
     watchIndexingThenReload();
   } catch (e) {
-    setExplorerActionStatus('Failed: ' + e.message, true);
+    setExplorerActionStatus(t('explorer.actionFailed', { msg: e.message }), true);
   } finally {
     btn.disabled = false;
   }
@@ -2283,11 +2633,12 @@ function watchIndexingThenReload() {
     await pollIndexStatus();
     const s = indexStatuses[currentSearchRepo];
     if (s && s.state === 'indexing') {
-      setExplorerActionStatus('Indexing… ' + (s.total_files > 0
-        ? s.indexed_files + ' / ' + s.total_files + ' files' : ''));
+      setExplorerActionStatus(s.total_files > 0
+        ? t('explorer.indexingN', { indexed: s.indexed_files, total: s.total_files })
+        : t('stat.statusIndexing'));
       explorerWatchTimer = setTimeout(tick, 1200);
     } else {
-      setExplorerActionStatus(s && s.state === 'error' ? 'Indexing failed' : 'Index updated', s && s.state === 'error');
+      setExplorerActionStatus(s && s.state === 'error' ? t('explorer.indexFailed') : t('explorer.indexUpdated'), s && s.state === 'error');
       loadExplorer();
     }
   };
@@ -2295,6 +2646,7 @@ function watchIndexingThenReload() {
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────
+initI18n();        // resolve locale (+ first-run picker) before data renders
 loadConfig();
 startIndexPolling();
 checkDefenderStatus();
@@ -2317,7 +2669,7 @@ async function checkDefenderStatus() {
     // Always render the default actionable state — the "Failed — retry" text is
     // transient (set only by a click handler) and must never survive a reload.
     const btn = document.getElementById('btn-defender-fix');
-    btn.textContent = 'Add exclusion';
+    btn.textContent = t('defender.add');
     btn.disabled = false;
   } catch (_) {}
 }
@@ -2325,7 +2677,7 @@ async function checkDefenderStatus() {
 document.getElementById('btn-defender-fix').addEventListener('click', async () => {
   const btn = document.getElementById('btn-defender-fix');
   btn.disabled = true;
-  btn.textContent = 'Adding…';
+  btn.textContent = t('defender.adding');
   try {
     const r = await fetch('/api/defender-exclude', { method: 'POST' });
     const data = await r.json();
@@ -2333,11 +2685,11 @@ document.getElementById('btn-defender-fix').addEventListener('click', async () =
       document.getElementById('banner-defender').classList.add('hidden');
       showToast();
     } else {
-      btn.textContent = 'Failed — retry';
+      btn.textContent = t('defender.failRetry');
       btn.disabled = false;
     }
   } catch (_) {
-    btn.textContent = 'Failed — retry';
+    btn.textContent = t('defender.failRetry');
     btn.disabled = false;
   }
 });
@@ -2347,9 +2699,11 @@ document.getElementById('btn-defender-dismiss').addEventListener('click', () => 
   sessionStorage.setItem('defender-dismissed', '1');
 });
 
-// Close remove dropdowns on outside click.
+// Close remove dropdowns + language menu on outside click.
 document.addEventListener('click', () => {
   document.querySelectorAll('.remove-dropdown').forEach(d => d.classList.add('hidden'));
+  const langMenu = document.getElementById('lang-menu');
+  if (langMenu) langMenu.classList.add('hidden');
 });
 
 // Index All / Cancel All button.
@@ -2358,7 +2712,7 @@ document.getElementById('btn-index-all').addEventListener('click', async () => {
   const anyIndexing = Object.values(indexStatuses).some(s => s.state === 'indexing');
   btn.disabled = true;
   if (anyIndexing) {
-    btn.textContent = 'Cancelling…';
+    btn.textContent = t('repo.cancelling');
     const repos = Object.entries(indexStatuses)
       .filter(([, s]) => s.state === 'indexing')
       .map(([repo]) => repo);
@@ -2366,7 +2720,7 @@ document.getElementById('btn-index-all').addEventListener('click', async () => {
       fetch('/api/repos/' + encodeRepoId(repo) + '/cancel-index', { method: 'POST' }).catch(() => {})
     ));
   } else {
-    btn.textContent = 'Indexing…';
+    btn.textContent = t('repos.indexing');
     try {
       await fetch('/api/index-all', { method: 'POST' });
     } catch (_) {}
@@ -2437,13 +2791,13 @@ document.getElementById('btn-cancel-index-modal').addEventListener('click', asyn
   if (!indexModalRepo) return;
   const btn = document.getElementById('btn-cancel-index-modal');
   btn.disabled = true;
-  btn.textContent = 'Cancelling…';
+  btn.textContent = t('repo.cancelling');
   try {
     await fetch('/api/repos/' + encodeRepoId(indexModalRepo) + '/cancel-index', { method: 'POST' });
     await pollIndexStatus();
   } catch (_) {}
   btn.disabled = false;
-  btn.textContent = 'Cancel';
+  btn.textContent = t('action.cancel');
 });
 document.getElementById('modal-index-progress').addEventListener('click', (e) => {
   if (e.target === e.currentTarget) closeIndexModal();
