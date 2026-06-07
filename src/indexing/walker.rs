@@ -9,7 +9,11 @@ pub const CODE_EXTENSIONS: &[&str] = &[
     "py", "js", "ts", "tsx", "jsx", "rs", "go", "java", "cs", "cpp", "c", "h", "hpp", "cc", "cxx", "hxx", "hh",
     "rb", "php", "swift", "kt", "scala", "ex", "exs", "clj", "hs", "ml", "lua", "r",
     "sh", "bash", "zsh", "fish", "ps1", "yaml", "yml", "toml", "json", "xml", "html",
-    "css", "scss", "sql", "proto", "graphql", "md", "txt", "dockerfile", "tf", "hcl",
+    "css", "scss", "sass", "less", "sql", "proto", "graphql", "md", "txt", "dockerfile", "tf", "hcl",
+    "vue", "svelte", "astro", "mdx", "prisma",
+    "dart", "zig", "nim", "sol", "elm", "jl", "erl", "hrl", "nix",
+    "m", "mm", "groovy", "gradle", "pl", "pm", "rst",
+    "wgsl", "glsl", "hlsl",
 ];
 
 /// Non-dot directories to always skip (dot-prefixed directories are pruned by the
@@ -51,9 +55,20 @@ pub fn is_under_hidden_dir(repo_root: &Path, path: &Path) -> bool {
 /// This is the single source of truth for the file-type allowlist, shared by
 /// the full-rebuild `walk_repo` and the watcher-driven incremental change filter
 /// so both paths index exactly the same set of file types.
+///
+/// `extra_extensions` supplies user-configured extensions beyond the built-in
+/// `CODE_EXTENSIONS` list (from `Settings.custom_extensions`).
 pub fn has_indexable_extension(path: &Path) -> bool {
+    has_indexable_extension_with(path, &[])
+}
+
+pub fn has_indexable_extension_with(path: &Path, extra_extensions: &[String]) -> bool {
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        return CODE_EXTENSIONS.contains(&ext.to_lowercase().as_str());
+        let lower = ext.to_lowercase();
+        if CODE_EXTENSIONS.contains(&lower.as_str()) {
+            return true;
+        }
+        return extra_extensions.iter().any(|e| e == &lower);
     }
     // No extension — allow a small set of well-known extension-less files.
     let fname = path
@@ -108,6 +123,7 @@ pub fn is_under_skip_dir(repo_root: &Path, path: &Path) -> bool {
 pub struct ChangeFilter {
     repo_root: std::path::PathBuf,
     gitignore: ignore::gitignore::Gitignore,
+    extra_extensions: Vec<String>,
 }
 
 impl ChangeFilter {
@@ -115,6 +131,10 @@ impl ChangeFilter {
     /// rules once. A missing or malformed ignore file degrades to a matcher that
     /// excludes nothing (the other predicates still apply).
     pub fn new(repo_root: &Path) -> Self {
+        Self::new_with_extensions(repo_root, vec![])
+    }
+
+    pub fn new_with_extensions(repo_root: &Path, extra_extensions: Vec<String>) -> Self {
         let mut builder = GitignoreBuilder::new(repo_root);
         let _ = builder.add(repo_root.join(".gitignore"));
         let _ = builder.add(repo_root.join(".ignore"));
@@ -125,13 +145,14 @@ impl ChangeFilter {
         Self {
             repo_root: repo_root.to_path_buf(),
             gitignore,
+            extra_extensions,
         }
     }
 
     /// Returns true if `path` passes every indexability rule (extension, dot-dir,
     /// SKIP_DIRS, gitignore) and should therefore be indexed.
     pub fn allows(&self, path: &Path) -> bool {
-        if !has_indexable_extension(path)
+        if !has_indexable_extension_with(path, &self.extra_extensions)
             || is_under_hidden_dir(&self.repo_root, path)
             || is_under_skip_dir(&self.repo_root, path)
         {
@@ -148,6 +169,10 @@ impl ChangeFilter {
 /// Walk a repository directory and return all indexable file paths.
 /// Respects .gitignore and .ignore files via the `ignore` crate.
 pub fn walk_repo(repo_path: &str) -> Vec<String> {
+    walk_repo_with(repo_path, &[])
+}
+
+pub fn walk_repo_with(repo_path: &str, extra_extensions: &[String]) -> Vec<String> {
     let root = Path::new(repo_path);
     if !root.exists() {
         return vec![];
@@ -189,7 +214,7 @@ pub fn walk_repo(repo_path: &str) -> Vec<String> {
                     continue;
                 }
                 let path = entry.path();
-                if has_indexable_extension(path) {
+                if has_indexable_extension_with(path, extra_extensions) {
                     debug!(path = ?path, "discovered file");
                     if let Some(s) = path.to_str() {
                         files.push(s.to_string());

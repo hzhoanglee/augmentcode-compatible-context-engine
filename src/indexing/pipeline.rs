@@ -19,7 +19,7 @@ use crate::embedding::voyage::VoyageClient;
 use crate::indexing::ProgressHandle;
 use crate::indexing::events::{IndexEvent, IndexEventBus};
 use crate::indexing::tracker::{ChangeKind, FileChange, stat_file};
-use crate::indexing::walker::{ChangeFilter, walk_repo};
+use crate::indexing::walker::{ChangeFilter, walk_repo_with};
 use crate::parsing::parse_file;
 use crate::parsing::relations::{EdgeKind, EdgeTarget};
 use crate::parsing::symbols::Symbol;
@@ -269,6 +269,8 @@ pub struct IndexPipeline {
     embed_concurrency: usize,
     /// Optional file-based embedding cache to avoid redundant Voyage API calls.
     cache: Option<Arc<EmbeddingCache>>,
+    /// User-configured extra file extensions beyond the built-in CODE_EXTENSIONS.
+    extra_extensions: Vec<String>,
 }
 
 impl IndexPipeline {
@@ -278,7 +280,12 @@ impl IndexPipeline {
 
     pub fn new_with_concurrency(repo: String, voyage: Option<VoyageClient>, embed_concurrency: usize, cache: Option<EmbeddingCache>) -> Self {
         let embed_concurrency = embed_concurrency.max(1);
-        Self { repo, voyage, embed_concurrency, cache: cache.map(Arc::new) }
+        Self { repo, voyage, embed_concurrency, cache: cache.map(Arc::new), extra_extensions: vec![] }
+    }
+
+    pub fn with_extra_extensions(mut self, extra: Vec<String>) -> Self {
+        self.extra_extensions = extra;
+        self
     }
 
     /// Run the pipeline against the shared `db` handle.
@@ -307,7 +314,8 @@ impl IndexPipeline {
             // Walk is needed here (once) to populate Started.total_files.
             // Run it off the async runtime to avoid blocking the executor.
             let repo_clone = self.repo.clone();
-            let total_files = tokio::task::spawn_blocking(move || walk_repo(&repo_clone).len() as u64)
+            let ext_clone = self.extra_extensions.clone();
+            let total_files = tokio::task::spawn_blocking(move || walk_repo_with(&repo_clone, &ext_clone).len() as u64)
                 .await
                 .unwrap_or(0);
             if let Some(bus) = event_bus {
@@ -381,12 +389,13 @@ impl IndexPipeline {
                 // Manual/poll incremental: must walk to detect changes.
                 // Run off the async runtime — this is genuinely O(repo).
                 let repo_clone = self.repo.clone();
+                let ext_clone = self.extra_extensions.clone();
                 let meta_map: HashMap<String, (i64, i64)> = stored_meta
                     .iter()
                     .map(|m| (m.path.clone(), (m.mtime, m.size)))
                     .collect();
                 tokio::task::spawn_blocking(move || {
-                    let all_files = walk_repo(&repo_clone);
+                    let all_files = walk_repo_with(&repo_clone, &ext_clone);
                     crate::indexing::tracker::detect_changes(&all_files, &meta_map)
                 })
                 .await
@@ -396,7 +405,7 @@ impl IndexPipeline {
 
         // Filter out Added/Modified changes whose paths are inside dot-prefixed directories.
         // Deleted changes are allowed through to clean up any previously indexed dot-dir entries.
-        let file_changes = filter_hidden_changes(std::path::Path::new(&self.repo), file_changes);
+        let file_changes = filter_hidden_changes_with(std::path::Path::new(&self.repo), file_changes, self.extra_extensions.clone());
 
         if file_changes.is_empty() {
             debug!(repo = %self.repo, "no changes detected");
@@ -487,7 +496,7 @@ impl IndexPipeline {
         key_hints: &[String],
         cancel_token: Option<&CancellationToken>,
     ) -> Result<(Vec<(ChunkId, Vec<f32>)>, IndexPipelineStats)> {
-        let all_files = walk_repo(&self.repo);
+        let all_files = walk_repo_with(&self.repo, &self.extra_extensions);
         info!(repo = %self.repo, file_count = all_files.len(), "walking repo for full rebuild");
 
         // Delete everything first (crash-safe: file_meta is the commit marker,
@@ -2440,8 +2449,13 @@ async fn flush_edge_batch(
 /// Deleted changes are ALWAYS allowed through regardless of the rules above, so
 /// any artifact that a previous (unfiltered) watcher run indexed is cleaned up
 /// when it is later removed — self-healing without requiring a full rebuild.
+#[cfg(test)]
 pub(crate) fn filter_hidden_changes(repo: &std::path::Path, changes: Vec<FileChange>) -> Vec<FileChange> {
-    let filter = ChangeFilter::new(repo);
+    filter_hidden_changes_with(repo, changes, vec![])
+}
+
+pub(crate) fn filter_hidden_changes_with(repo: &std::path::Path, changes: Vec<FileChange>, extra_extensions: Vec<String>) -> Vec<FileChange> {
+    let filter = ChangeFilter::new_with_extensions(repo, extra_extensions);
     changes
         .into_iter()
         .filter(|c| {

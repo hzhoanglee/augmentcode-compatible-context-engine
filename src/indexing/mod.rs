@@ -719,6 +719,7 @@ async fn run_consumer(
             };
 
             IndexPipeline::new_with_concurrency(repo.clone(), voyage_client, embed_concurrency, embed_cache)
+                .with_extra_extensions(settings_ref.custom_extensions.clone())
         };
 
         match pipeline

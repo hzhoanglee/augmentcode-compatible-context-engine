@@ -355,6 +355,26 @@
           </label>
         </div>
       </section>
+
+      <!-- Custom Extensions -->
+      <section class="mb-8 pt-6 border-t border-gray-200 dark:border-wiki-border">
+        <h2 data-i18n="settings.extensions" class="font-wiki text-xl dark:text-wiki-heading text-gray-900 border-b border-gray-200 dark:border-wiki-border pb-2 mb-4">Custom Extensions</h2>
+        <p data-i18n="settings.extensionsHelp" class="text-sm text-gray-600 dark:text-wiki-text-muted mb-3">
+          Add file extensions to index beyond the built-in list. Enter without the leading dot.
+        </p>
+        <div id="custom-extensions-list" class="space-y-2 mb-2"></div>
+        <form id="form-add-extension" class="flex gap-2" onsubmit="return false;">
+          <input id="input-extension" type="text" placeholder="e.g. prisma" data-i18n-ph="settings.extPlaceholder"
+                 class="flex-1 border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm font-mono
+                        placeholder:text-gray-400 dark:placeholder:text-wiki-text-muted
+                        focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
+          <button type="submit" data-i18n="action.add"
+                  class="px-4 py-2 bg-blue-600 dark:bg-wiki-border-active/20 dark:border dark:border-wiki-border-active text-white dark:text-wiki-link text-sm rounded
+                         hover:bg-blue-700 dark:hover:bg-wiki-border-active/30 focus:outline-none focus:ring-2 focus:ring-blue-400">
+            Add
+          </button>
+        </form>
+      </section>
     </div>
 
     <!-- Tab: MCP -->
@@ -898,6 +918,10 @@ const STR = {
   'settings.setupHint':{ en: `Add an embedding API key below to start indexing repositories.`, vi: `Thêm embedding API key bên dưới để bắt đầu index repo.`, zh: `在下方添加嵌入 API 密钥即可开始索引仓库。` },
   'settings.mcpTools': { en: `MCP Tools`, vi: `MCP Tools`, zh: `MCP 工具` },
   'settings.mcpToolsHelp': { en: `Choose which MCP tools are exposed to clients. Disabled tools are hidden from tool lists.`, vi: `Chọn MCP tool nào được expose cho client. Tool bị tắt sẽ ẩn khỏi danh sách tool.`, zh: `选择向客户端公开哪些 MCP 工具。禁用的工具将从工具列表中隐藏。` },
+  'settings.extensions':   { en: `Custom Extensions`, vi: `Extension tùy chỉnh`, zh: `自定义扩展名` },
+  'settings.extensionsHelp': { en: `Add file extensions to index beyond the built-in list. Enter without the leading dot.`, vi: `Thêm extension để index ngoài danh sách mặc định. Nhập không cần dấu chấm đầu.`, zh: `添加内置列表之外的文件扩展名。输入时无需前导点。` },
+  'settings.extPlaceholder': { en: `e.g. prisma`, vi: `vd. prisma`, zh: `例如 prisma` },
+  'settings.extDuplicate': { en: `Extension already added`, vi: `Extension đã được thêm`, zh: `扩展名已添加` },
 
   // MCP
   'mcp.endpoint':      { en: `Endpoint`, vi: `Endpoint`, zh: `端点` },
@@ -1458,6 +1482,8 @@ function renderAll() {
   const enabledTools = cfg.enabled_mcp_tools || ['codebase-retrieval', 'file-retrieval'];
   document.getElementById('mcp-tool-codebase-retrieval').checked = enabledTools.includes('codebase-retrieval');
   document.getElementById('mcp-tool-file-retrieval').checked = enabledTools.includes('file-retrieval');
+  // Custom extensions
+  renderExtensionList();
 }
 
 function escHtml(str) {
@@ -1588,6 +1614,52 @@ function handleAddLlmKey() {
 document.getElementById('form-add-llm-key').addEventListener('submit', handleAddLlmKey);
 document.getElementById('input-llm-key').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); handleAddLlmKey(); }
+});
+
+function renderExtensionList() {
+  const container = document.getElementById('custom-extensions-list');
+  container.innerHTML = '';
+  const exts = cfg.custom_extensions || [];
+  exts.forEach((ext, idx) => {
+    const row = document.createElement('div');
+    row.className = 'flex items-center gap-2 border border-gray-200 dark:border-wiki-border rounded px-3 py-2 text-sm bg-white dark:bg-wiki-surface';
+    const display = document.createElement('span');
+    display.className = 'font-mono text-gray-800 dark:text-wiki-text flex-1';
+    display.textContent = '.' + ext;
+    const removeBtn = document.createElement('button');
+    removeBtn.textContent = t('action.remove');
+    removeBtn.className = 'text-xs text-gray-400 dark:text-wiki-text-muted hover:text-red-500 dark:hover:text-red-400 focus:outline-none focus:ring-2 focus:ring-red-300 rounded px-2 py-1';
+    removeBtn.addEventListener('click', () => {
+      cfg.custom_extensions.splice(idx, 1);
+      renderExtensionList();
+      saveNow();
+    });
+    row.appendChild(display);
+    row.appendChild(removeBtn);
+    container.appendChild(row);
+  });
+}
+
+function handleAddExtension() {
+  const input = document.getElementById('input-extension');
+  let val = input.value.trim().toLowerCase();
+  if (!val) return;
+  // Strip leading dot if user typed one
+  val = val.replace(/^\.+/, '');
+  if (!val) return;
+  if (!cfg.custom_extensions) cfg.custom_extensions = [];
+  if (cfg.custom_extensions.includes(val)) {
+    input.value = '';
+    return;
+  }
+  cfg.custom_extensions.push(val);
+  input.value = '';
+  renderExtensionList();
+  saveNow();
+}
+document.getElementById('form-add-extension').addEventListener('submit', handleAddExtension);
+document.getElementById('input-extension').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); handleAddExtension(); }
 });
 
 document.getElementById('embedding-model').addEventListener('input', (e) => {
@@ -2268,7 +2340,9 @@ async function loadExplorerFiles(token) {
   truncEl.classList.add('hidden');
   listEl.innerHTML = fileRowSkeleton();
   try {
-    const res = await fetch('/api/repos/' + repoId + '/files');
+    let url = '/api/repos/' + repoId + '/files';
+    if (explorerFileFilter.trim()) url += '?filter=' + encodeURIComponent(explorerFileFilter.trim());
+    const res = await fetch(url);
     const data = await res.json();
     if (token !== explorerLoadToken) return;   // superseded by a later load/reset
     if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
@@ -2304,18 +2378,16 @@ function renderFiles() {
   const filterInput = document.getElementById('input-file-filter');
   listEl.innerHTML = '';
 
-  filterInput.classList.toggle('hidden', explorerFiles.length < 2);
+  filterInput.classList.remove('hidden');
 
   if (explorerFiles.length === 0) {
     emptyEl.classList.remove('hidden');
+    emptyEl.textContent = explorerFileFilter.trim() ? t('files.noMatch') : t('files.empty');
     return;
   }
   emptyEl.classList.add('hidden');
 
-  const needle = explorerFileFilter.trim().toLowerCase();
-  const shown = explorerFiles.filter(f => !needle || f.path.toLowerCase().includes(needle));
-
-  shown.forEach((f) => {
+  explorerFiles.forEach((f) => {
     const ext = fileExt(f.path);
     const row = document.createElement('button');
     row.className = 'w-full flex items-center gap-3 px-3 py-2 text-left text-sm hover:bg-gray-50 dark:hover:bg-wiki-surface/60 focus:outline-none focus:ring-2 focus:ring-blue-400';
@@ -2328,18 +2400,16 @@ function renderFiles() {
     row.addEventListener('click', () => openChunkDetail(f.path));
     listEl.appendChild(row);
   });
-
-  if (shown.length === 0) {
-    const none = document.createElement('div');
-    none.className = 'px-3 py-2 text-sm text-gray-400 dark:text-wiki-text-muted';
-    none.textContent = t('files.noMatch');
-    listEl.appendChild(none);
-  }
 }
 
+let fileFilterTimer = 0;
 document.getElementById('input-file-filter').addEventListener('input', (e) => {
   explorerFileFilter = e.target.value;
-  renderFiles();
+  clearTimeout(fileFilterTimer);
+  fileFilterTimer = setTimeout(() => {
+    const token = ++explorerLoadToken;
+    loadExplorerFiles(token);
+  }, 300);
 });
 
 // ─── Chunk detail panel ─────────────────────────────────────────────────────

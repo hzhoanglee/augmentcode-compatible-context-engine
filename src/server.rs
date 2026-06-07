@@ -573,6 +573,7 @@ async fn get_index_stats(
 async fn get_repo_files(
     State(state): State<AppState>,
     Path(repo_id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> Response {
     let repo = match decode_repo_id(&repo_id) {
         Ok(r) => r,
@@ -589,7 +590,8 @@ async fn get_repo_files(
     };
 
     const FILE_LIMIT: usize = 2000;
-    match store::ops::files_page(&db, &repo, FILE_LIMIT).await {
+    let filter = params.get("filter").map(|s| s.as_str());
+    match store::ops::files_page(&db, &repo, FILE_LIMIT, filter).await {
         Ok(rows) => {
             let truncated = rows.len() >= FILE_LIMIT;
             Json(json!({ "files": rows, "truncated": truncated })).into_response()

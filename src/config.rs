@@ -9,14 +9,14 @@ use serde_json::Value;
 use tempfile::NamedTempFile;
 
 /// Bump this when a new migration is appended to MIGRATIONS.
-pub const CURRENT_VERSION: u32 = 4;
+pub const CURRENT_VERSION: u32 = 5;
 
 /// Migration function type: transforms a JSON Value from version N to version N+1.
 pub type MigrationFn = fn(Value) -> Result<Value, ConfigError>;
 
 /// Ordered list of migration functions. Each entry migrates from version N to N+1,
 /// where N is the index into this slice (0-based, so index 0 = v1→v2, etc.).
-pub const MIGRATIONS: &[MigrationFn] = &[migrate_v1_to_v2, migrate_v2_to_v3, migrate_v3_to_v4];
+pub const MIGRATIONS: &[MigrationFn] = &[migrate_v1_to_v2, migrate_v2_to_v3, migrate_v3_to_v4, migrate_v4_to_v5];
 
 /// v1→v2: introduce `data_dir` (Option<PathBuf>). The body is a no-op stamp —
 /// `serde(default)` already handles missing fields on deserialize, but we
@@ -54,6 +54,16 @@ fn migrate_v3_to_v4(mut value: Value) -> Result<Value, ConfigError> {
                 Value::String("file-retrieval".to_string()),
             ])
         });
+    }
+    Ok(value)
+}
+
+/// v4→v5: introduce `custom_extensions` (Vec<String>). Defaults to empty —
+/// users add their own extensions beyond the built-in CODE_EXTENSIONS list.
+fn migrate_v4_to_v5(mut value: Value) -> Result<Value, ConfigError> {
+    if let Value::Object(ref mut obj) = value {
+        obj.entry("custom_extensions".to_string())
+            .or_insert_with(|| Value::Array(vec![]));
     }
     Ok(value)
 }
@@ -213,6 +223,10 @@ pub struct Settings {
     /// from `list_tools` and reject calls with a "tool disabled" error.
     #[serde(default = "default_enabled_mcp_tools")]
     pub enabled_mcp_tools: Vec<String>,
+    /// Extra file extensions (without leading dot, lowercase) to index beyond the
+    /// built-in `CODE_EXTENSIONS` list. E.g. `["prisma", "zig", "nim"]`.
+    #[serde(default)]
+    pub custom_extensions: Vec<String>,
 }
 
 impl Default for Settings {
@@ -228,6 +242,7 @@ impl Default for Settings {
             data_dir: None,
             embeddings_dir: None,
             enabled_mcp_tools: default_enabled_mcp_tools(),
+            custom_extensions: Vec::new(),
         }
     }
 }

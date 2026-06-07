@@ -681,6 +681,7 @@ pub async fn files_page(
     db: &Surreal<Db>,
     repo: &str,
     limit: usize,
+    filter: Option<&str>,
 ) -> Result<Vec<FileBrowserRow>> {
     #[derive(Deserialize)]
     struct MetaRow {
@@ -696,16 +697,32 @@ pub async fn files_page(
         chunk_count: i64,
     }
 
-    let metas: Vec<MetaRow> = db
-        .query(
-            "SELECT path, mtime, size, chunk_count FROM file_meta \
-             WHERE repo = $repo ORDER BY path LIMIT $limit",
-        )
-        .bind(("repo", repo.to_string()))
-        .bind(("limit", limit as i64))
-        .await
-        .context("files_page: file_meta")?
-        .take(0)?;
+    let metas: Vec<MetaRow> = match filter {
+        Some(f) if !f.is_empty() => {
+            db.query(
+                "SELECT path, mtime, size, chunk_count FROM file_meta \
+                 WHERE repo = $repo AND string::lowercase(path) CONTAINS string::lowercase($filter) \
+                 ORDER BY path LIMIT $limit",
+            )
+            .bind(("repo", repo.to_string()))
+            .bind(("filter", f.to_string()))
+            .bind(("limit", limit as i64))
+            .await
+            .context("files_page: file_meta (filtered)")?
+            .take(0)?
+        }
+        _ => {
+            db.query(
+                "SELECT path, mtime, size, chunk_count FROM file_meta \
+                 WHERE repo = $repo ORDER BY path LIMIT $limit",
+            )
+            .bind(("repo", repo.to_string()))
+            .bind(("limit", limit as i64))
+            .await
+            .context("files_page: file_meta")?
+            .take(0)?
+        }
+    };
 
     Ok(metas
         .into_iter()
