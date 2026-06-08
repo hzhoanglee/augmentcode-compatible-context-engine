@@ -482,6 +482,23 @@ pub async fn set_meta(db: &Surreal<Db>, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+/// Get per-repo ignored paths (forward-slash-normalized relative paths).
+pub async fn get_ignored_paths(db: &Surreal<Db>) -> Result<Vec<String>> {
+    match get_meta(db, "ignored_paths").await? {
+        Some(json_str) => {
+            let paths: Vec<String> = serde_json::from_str(&json_str).unwrap_or_default();
+            Ok(paths)
+        }
+        None => Ok(vec![]),
+    }
+}
+
+/// Set per-repo ignored paths (forward-slash-normalized relative paths).
+pub async fn set_ignored_paths(db: &Surreal<Db>, paths: &[String]) -> Result<()> {
+    let json_str = serde_json::to_string(paths).context("serialize ignored_paths")?;
+    set_meta(db, "ignored_paths", &json_str).await
+}
+
 /// Get all symbols from a given file (used for edge resolution).
 pub async fn get_symbols_for_file(
     db: &Surreal<Db>,
@@ -1384,5 +1401,41 @@ mod call_graph_tests {
             caller_callee, 1,
             "5 duplicate call sites must collapse to exactly 1 edge, got {caller_callee}"
         );
+    }
+}
+
+#[cfg(test)]
+mod ignored_paths_tests {
+    use super::*;
+    use crate::store::open_db;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn round_trip_ignored_paths() {
+        let home = TempDir::new().unwrap();
+        let db = open_db(home.path(), "/test/ignored").await.expect("open db");
+
+        // Initially empty.
+        let paths = get_ignored_paths(&db).await.unwrap();
+        assert!(paths.is_empty());
+
+        // Set some paths.
+        let to_set = vec!["doc/Building.md".to_string(), "src/generated.rs".to_string()];
+        set_ignored_paths(&db, &to_set).await.unwrap();
+
+        let loaded = get_ignored_paths(&db).await.unwrap();
+        assert_eq!(loaded, to_set);
+
+        // Update (remove one, add another).
+        let updated = vec!["doc/Building.md".to_string(), "README.md".to_string()];
+        set_ignored_paths(&db, &updated).await.unwrap();
+
+        let loaded2 = get_ignored_paths(&db).await.unwrap();
+        assert_eq!(loaded2, updated);
+
+        // Clear to empty.
+        set_ignored_paths(&db, &[]).await.unwrap();
+        let loaded3 = get_ignored_paths(&db).await.unwrap();
+        assert!(loaded3.is_empty());
     }
 }

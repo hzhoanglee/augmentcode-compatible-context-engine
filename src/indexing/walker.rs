@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Component, Path};
 
 use ignore::gitignore::GitignoreBuilder;
@@ -124,6 +125,9 @@ pub struct ChangeFilter {
     repo_root: std::path::PathBuf,
     gitignore: ignore::gitignore::Gitignore,
     extra_extensions: Vec<String>,
+    ignore_filenames: HashSet<String>,
+    /// Per-repo ignored relative paths (forward-slash-normalized).
+    ignore_paths: HashSet<String>,
 }
 
 impl ChangeFilter {
@@ -135,6 +139,14 @@ impl ChangeFilter {
     }
 
     pub fn new_with_extensions(repo_root: &Path, extra_extensions: Vec<String>) -> Self {
+        Self::new_full(repo_root, extra_extensions, HashSet::new())
+    }
+
+    pub fn new_full(repo_root: &Path, extra_extensions: Vec<String>, ignore_filenames: HashSet<String>) -> Self {
+        Self::new_complete(repo_root, extra_extensions, ignore_filenames, HashSet::new())
+    }
+
+    pub fn new_complete(repo_root: &Path, extra_extensions: Vec<String>, ignore_filenames: HashSet<String>, ignore_paths: HashSet<String>) -> Self {
         let mut builder = GitignoreBuilder::new(repo_root);
         let _ = builder.add(repo_root.join(".gitignore"));
         let _ = builder.add(repo_root.join(".ignore"));
@@ -146,15 +158,31 @@ impl ChangeFilter {
             repo_root: repo_root.to_path_buf(),
             gitignore,
             extra_extensions,
+            ignore_filenames,
+            ignore_paths,
         }
     }
 
     /// Returns true if `path` passes every indexability rule (extension, dot-dir,
-    /// SKIP_DIRS, gitignore) and should therefore be indexed.
+    /// SKIP_DIRS, gitignore, ignore filenames, per-repo ignore paths) and should
+    /// therefore be indexed.
     pub fn allows(&self, path: &Path) -> bool {
         if !has_indexable_extension_with(path, &self.extra_extensions)
             || is_under_hidden_dir(&self.repo_root, path)
             || is_under_skip_dir(&self.repo_root, path)
+        {
+            return false;
+        }
+        if !self.ignore_filenames.is_empty()
+            && let Some(fname) = path.file_name().and_then(|n| n.to_str())
+            && self.ignore_filenames.contains(fname)
+        {
+            return false;
+        }
+        if !self.ignore_paths.is_empty()
+            && let Ok(rel) = path.strip_prefix(&self.repo_root)
+            && let Some(rel_str) = rel.to_str()
+            && self.ignore_paths.contains(&rel_str.replace('\\', "/"))
         {
             return false;
         }
@@ -169,10 +197,10 @@ impl ChangeFilter {
 /// Walk a repository directory and return all indexable file paths.
 /// Respects .gitignore and .ignore files via the `ignore` crate.
 pub fn walk_repo(repo_path: &str) -> Vec<String> {
-    walk_repo_with(repo_path, &[])
+    walk_repo_with(repo_path, &[], &HashSet::new(), &HashSet::new())
 }
 
-pub fn walk_repo_with(repo_path: &str, extra_extensions: &[String]) -> Vec<String> {
+pub fn walk_repo_with(repo_path: &str, extra_extensions: &[String], ignore_filenames: &HashSet<String>, ignore_paths: &HashSet<String>) -> Vec<String> {
     let root = Path::new(repo_path);
     if !root.exists() {
         return vec![];
@@ -215,6 +243,19 @@ pub fn walk_repo_with(repo_path: &str, extra_extensions: &[String]) -> Vec<Strin
                 }
                 let path = entry.path();
                 if has_indexable_extension_with(path, extra_extensions) {
+                    if !ignore_filenames.is_empty()
+                        && let Some(fname) = path.file_name().and_then(|n| n.to_str())
+                        && ignore_filenames.contains(fname)
+                    {
+                        continue;
+                    }
+                    if !ignore_paths.is_empty()
+                        && let Ok(rel) = path.strip_prefix(root)
+                        && let Some(rel_str) = rel.to_str()
+                        && ignore_paths.contains(&rel_str.replace('\\', "/"))
+                    {
+                        continue;
+                    }
                     debug!(path = ?path, "discovered file");
                     if let Some(s) = path.to_str() {
                         files.push(s.to_string());
@@ -492,6 +533,115 @@ mod tests {
         assert!(
             filter.allows(&keep_native),
             "src/keep.rs must still pass; candidate={keep_native:?}"
+        );
+    }
+
+    #[test]
+    fn walk_repo_skips_ignored_filenames() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        touch(root, "src/main.rs");
+        touch(root, "CLAUDE.md");
+        touch(root, "AGENTS.md");
+        touch(root, "src/lib.rs");
+
+        let repo_str = root.to_str().unwrap();
+        let ignore: HashSet<String> = ["CLAUDE.md", "AGENTS.md"].iter().map(|s| s.to_string()).collect();
+        let result: Vec<String> = walk_repo_with(repo_str, &[], &ignore, &HashSet::new()).into_iter().map(|p| fwd(&p)).collect();
+
+        assert!(
+            result.iter().any(|p| p.ends_with("src/main.rs")),
+            "src/main.rs must be indexed; got: {:?}", result
+        );
+        assert!(
+            result.iter().any(|p| p.ends_with("src/lib.rs")),
+            "src/lib.rs must be indexed; got: {:?}", result
+        );
+        assert!(
+            !result.iter().any(|p| p.ends_with("CLAUDE.md")),
+            "CLAUDE.md must be skipped; got: {:?}", result
+        );
+        assert!(
+            !result.iter().any(|p| p.ends_with("AGENTS.md")),
+            "AGENTS.md must be skipped; got: {:?}", result
+        );
+    }
+
+    #[test]
+    fn change_filter_ignores_filenames_but_allows_deleted() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        touch(root, "CLAUDE.md");
+        touch(root, "src/main.rs");
+
+        let ignore: HashSet<String> = ["CLAUDE.md"].iter().map(|s| s.to_string()).collect();
+        let filter = ChangeFilter::new_full(root, vec![], ignore);
+
+        assert!(
+            !filter.allows(&root.join("CLAUDE.md")),
+            "CLAUDE.md Modified must be rejected by ignore_filenames"
+        );
+        assert!(
+            filter.allows(&root.join("src").join("main.rs")),
+            "src/main.rs must pass"
+        );
+    }
+
+    #[test]
+    fn walk_repo_skips_ignored_paths() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        touch(root, "src/main.rs");
+        touch(root, "doc/Building.md");
+        touch(root, "doc/README.md");
+
+        let repo_str = root.to_str().unwrap();
+        let ignore_paths: HashSet<String> = ["doc/Building.md"].iter().map(|s| s.to_string()).collect();
+        let result: Vec<String> = walk_repo_with(repo_str, &[], &HashSet::new(), &ignore_paths)
+            .into_iter().map(|p| fwd(&p)).collect();
+
+        assert!(
+            result.iter().any(|p| p.ends_with("src/main.rs")),
+            "src/main.rs must be indexed; got: {:?}", result
+        );
+        assert!(
+            result.iter().any(|p| p.ends_with("doc/README.md")),
+            "doc/README.md must be indexed; got: {:?}", result
+        );
+        assert!(
+            !result.iter().any(|p| p.ends_with("doc/Building.md")),
+            "doc/Building.md must be skipped by ignore_paths; got: {:?}", result
+        );
+    }
+
+    #[test]
+    fn change_filter_ignores_paths_across_separator_forms() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        touch(root, "doc/Building.md");
+        touch(root, "src/main.rs");
+
+        // Build filter with forward-slash root (as config may store it).
+        let root_fwd = root.to_str().unwrap().replace('\\', "/");
+        let ignore_paths: HashSet<String> = ["doc/Building.md"].iter().map(|s| s.to_string()).collect();
+        let filter = ChangeFilter::new_complete(
+            Path::new(&root_fwd), vec![], HashSet::new(), ignore_paths,
+        );
+
+        // Candidate as native (PathBuf::join → backslash on Windows).
+        let building_native = root.join("doc").join("Building.md");
+        let main_native = root.join("src").join("main.rs");
+
+        assert!(
+            !filter.allows(&building_native),
+            "doc/Building.md must be rejected by ignore_paths across separator forms; \
+             root={root_fwd:?} candidate={building_native:?}"
+        );
+        assert!(
+            filter.allows(&main_native),
+            "src/main.rs must pass; candidate={main_native:?}"
         );
     }
 }

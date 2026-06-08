@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -271,6 +271,10 @@ pub struct IndexPipeline {
     cache: Option<Arc<EmbeddingCache>>,
     /// User-configured extra file extensions beyond the built-in CODE_EXTENSIONS.
     extra_extensions: Vec<String>,
+    /// Filenames to skip during indexing (case-sensitive, filename-only match).
+    ignore_filenames: HashSet<String>,
+    /// Per-repo ignored relative paths (forward-slash-normalized).
+    ignore_paths: HashSet<String>,
 }
 
 impl IndexPipeline {
@@ -280,11 +284,21 @@ impl IndexPipeline {
 
     pub fn new_with_concurrency(repo: String, voyage: Option<VoyageClient>, embed_concurrency: usize, cache: Option<EmbeddingCache>) -> Self {
         let embed_concurrency = embed_concurrency.max(1);
-        Self { repo, voyage, embed_concurrency, cache: cache.map(Arc::new), extra_extensions: vec![] }
+        Self { repo, voyage, embed_concurrency, cache: cache.map(Arc::new), extra_extensions: vec![], ignore_filenames: HashSet::new(), ignore_paths: HashSet::new() }
     }
 
     pub fn with_extra_extensions(mut self, extra: Vec<String>) -> Self {
         self.extra_extensions = extra;
+        self
+    }
+
+    pub fn with_ignore_filenames(mut self, filenames: Vec<String>) -> Self {
+        self.ignore_filenames = filenames.into_iter().collect();
+        self
+    }
+
+    pub fn with_ignore_paths(mut self, paths: Vec<String>) -> Self {
+        self.ignore_paths = paths.into_iter().collect();
         self
     }
 
@@ -315,7 +329,9 @@ impl IndexPipeline {
             // Run it off the async runtime to avoid blocking the executor.
             let repo_clone = self.repo.clone();
             let ext_clone = self.extra_extensions.clone();
-            let total_files = tokio::task::spawn_blocking(move || walk_repo_with(&repo_clone, &ext_clone).len() as u64)
+            let ign_clone = self.ignore_filenames.clone();
+            let ign_paths_clone = self.ignore_paths.clone();
+            let total_files = tokio::task::spawn_blocking(move || walk_repo_with(&repo_clone, &ext_clone, &ign_clone, &ign_paths_clone).len() as u64)
                 .await
                 .unwrap_or(0);
             if let Some(bus) = event_bus {
@@ -390,12 +406,14 @@ impl IndexPipeline {
                 // Run off the async runtime — this is genuinely O(repo).
                 let repo_clone = self.repo.clone();
                 let ext_clone = self.extra_extensions.clone();
+                let ign_clone = self.ignore_filenames.clone();
+                let ign_paths_clone = self.ignore_paths.clone();
                 let meta_map: HashMap<String, (i64, i64)> = stored_meta
                     .iter()
                     .map(|m| (m.path.clone(), (m.mtime, m.size)))
                     .collect();
                 tokio::task::spawn_blocking(move || {
-                    let all_files = walk_repo_with(&repo_clone, &ext_clone);
+                    let all_files = walk_repo_with(&repo_clone, &ext_clone, &ign_clone, &ign_paths_clone);
                     crate::indexing::tracker::detect_changes(&all_files, &meta_map)
                 })
                 .await
@@ -405,7 +423,7 @@ impl IndexPipeline {
 
         // Filter out Added/Modified changes whose paths are inside dot-prefixed directories.
         // Deleted changes are allowed through to clean up any previously indexed dot-dir entries.
-        let file_changes = filter_hidden_changes_with(std::path::Path::new(&self.repo), file_changes, self.extra_extensions.clone());
+        let file_changes = filter_hidden_changes_with(std::path::Path::new(&self.repo), file_changes, self.extra_extensions.clone(), self.ignore_filenames.clone(), self.ignore_paths.clone());
 
         if file_changes.is_empty() {
             debug!(repo = %self.repo, "no changes detected");
@@ -496,7 +514,7 @@ impl IndexPipeline {
         key_hints: &[String],
         cancel_token: Option<&CancellationToken>,
     ) -> Result<(Vec<(ChunkId, Vec<f32>)>, IndexPipelineStats)> {
-        let all_files = walk_repo_with(&self.repo, &self.extra_extensions);
+        let all_files = walk_repo_with(&self.repo, &self.extra_extensions, &self.ignore_filenames, &self.ignore_paths);
         info!(repo = %self.repo, file_count = all_files.len(), "walking repo for full rebuild");
 
         // Delete everything first (crash-safe: file_meta is the commit marker,
@@ -2459,11 +2477,11 @@ async fn flush_edge_batch(
 /// when it is later removed — self-healing without requiring a full rebuild.
 #[cfg(test)]
 pub(crate) fn filter_hidden_changes(repo: &std::path::Path, changes: Vec<FileChange>) -> Vec<FileChange> {
-    filter_hidden_changes_with(repo, changes, vec![])
+    filter_hidden_changes_with(repo, changes, vec![], HashSet::new(), HashSet::new())
 }
 
-pub(crate) fn filter_hidden_changes_with(repo: &std::path::Path, changes: Vec<FileChange>, extra_extensions: Vec<String>) -> Vec<FileChange> {
-    let filter = ChangeFilter::new_with_extensions(repo, extra_extensions);
+pub(crate) fn filter_hidden_changes_with(repo: &std::path::Path, changes: Vec<FileChange>, extra_extensions: Vec<String>, ignore_filenames: HashSet<String>, ignore_paths: HashSet<String>) -> Vec<FileChange> {
+    let filter = ChangeFilter::new_complete(repo, extra_extensions, ignore_filenames, ignore_paths);
     changes
         .into_iter()
         .filter(|c| {
@@ -3765,6 +3783,61 @@ mod hidden_change_filter_tests {
             filtered.len(),
             2,
             "expected exactly 2 changes to survive; got: {:?}",
+            filtered.iter().map(|c| (&c.path, &c.kind)).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn filter_drops_ignored_filenames_but_allows_deleted() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let src_dir = root.join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        let src_main = src_dir.join("main.rs");
+        std::fs::File::create(&src_main).unwrap();
+
+        let claude_md = root.join("CLAUDE.md");
+        std::fs::File::create(&claude_md).unwrap();
+
+        let changes = vec![
+            FileChange {
+                path: src_main.to_str().unwrap().to_string(),
+                kind: ChangeKind::Modified,
+            },
+            FileChange {
+                path: claude_md.to_str().unwrap().to_string(),
+                kind: ChangeKind::Modified,
+            },
+            FileChange {
+                path: claude_md.to_str().unwrap().to_string(),
+                kind: ChangeKind::Deleted,
+            },
+        ];
+
+        let ignore: HashSet<String> = ["CLAUDE.md"].iter().map(|s| s.to_string()).collect();
+        let filtered = filter_hidden_changes_with(root, changes, vec![], ignore, HashSet::new());
+
+        assert!(
+            filtered.iter().any(|c| c.path.ends_with("main.rs") && c.kind == ChangeKind::Modified),
+            "src/main.rs Modified must survive; got: {:?}",
+            filtered.iter().map(|c| (&c.path, &c.kind)).collect::<Vec<_>>()
+        );
+        assert!(
+            !filtered.iter().any(|c| c.path.ends_with("CLAUDE.md") && c.kind == ChangeKind::Modified),
+            "CLAUDE.md Modified must be dropped; got: {:?}",
+            filtered.iter().map(|c| (&c.path, &c.kind)).collect::<Vec<_>>()
+        );
+        assert!(
+            filtered.iter().any(|c| c.path.ends_with("CLAUDE.md") && c.kind == ChangeKind::Deleted),
+            "CLAUDE.md Deleted must survive for self-heal; got: {:?}",
+            filtered.iter().map(|c| (&c.path, &c.kind)).collect::<Vec<_>>()
+        );
+
+        assert_eq!(
+            filtered.len(),
+            2,
+            "expected 2 changes (main.rs Modified + CLAUDE.md Deleted); got: {:?}",
             filtered.iter().map(|c| (&c.path, &c.kind)).collect::<Vec<_>>()
         );
     }

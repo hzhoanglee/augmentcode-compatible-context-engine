@@ -375,6 +375,26 @@
           </button>
         </form>
       </section>
+
+      <!-- Index Ignore List -->
+      <section class="mb-8 pt-6 border-t border-gray-200 dark:border-wiki-border">
+        <h2 data-i18n="settings.ignoreList" class="font-wiki text-xl dark:text-wiki-heading text-gray-900 border-b border-gray-200 dark:border-wiki-border pb-2 mb-4">Index Ignore List</h2>
+        <p data-i18n="settings.ignoreListHelp" class="text-sm text-gray-600 dark:text-wiki-text-muted mb-3">
+          Filenames to skip during indexing. Case-sensitive, matches the filename only (not the full path).
+        </p>
+        <div id="ignore-filenames-list" class="space-y-2 mb-2"></div>
+        <form id="form-add-ignore" class="flex gap-2" onsubmit="return false;">
+          <input id="input-ignore-filename" type="text" placeholder="e.g. CLAUDE.md" data-i18n-ph="settings.ignorePlaceholder"
+                 class="flex-1 border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm font-mono
+                        placeholder:text-gray-400 dark:placeholder:text-wiki-text-muted
+                        focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
+          <button type="submit" data-i18n="action.add"
+                  class="px-4 py-2 bg-blue-600 dark:bg-wiki-border-active/20 dark:border dark:border-wiki-border-active text-white dark:text-wiki-link text-sm rounded
+                         hover:bg-blue-700 dark:hover:bg-wiki-border-active/30 focus:outline-none focus:ring-2 focus:ring-blue-400">
+            Add
+          </button>
+        </form>
+      </section>
     </div>
 
     <!-- Tab: MCP -->
@@ -635,6 +655,12 @@
           </div>
           <div id="chunk-detail-neighbors" class="hidden px-3 py-2 border-b border-gray-100 dark:border-wiki-border text-xs text-gray-500 dark:text-wiki-text-muted"></div>
           <div id="chunk-detail-body" class="divide-y divide-gray-100 dark:divide-wiki-border max-h-96 overflow-y-auto"></div>
+        </div>
+
+        <!-- Ignored files panel -->
+        <div id="ignored-files-section" class="hidden mt-4">
+          <h3 data-i18n="files.ignoredHeading" class="font-wiki text-sm dark:text-wiki-heading text-gray-700 mb-2">Ignored files</h3>
+          <div id="ignored-files-list" class="border border-gray-200 dark:border-wiki-border rounded divide-y divide-gray-100 dark:divide-wiki-border overflow-y-auto" style="max-height: 200px;"></div>
         </div>
       </section>
     </div>
@@ -1053,6 +1079,12 @@ const STR = {
   'settings.extPlaceholder': { en: `e.g. prisma`, vi: `vd. prisma`, zh: `例如 prisma` },
   'settings.extDuplicate': { en: `Extension already added`, vi: `Extension đã được thêm`, zh: `扩展名已添加` },
 
+  // Settings — Index Ignore List
+  'settings.ignoreList':      { en: `Index Ignore List`, vi: `Danh sách filename bỏ qua khi index`, zh: `索引忽略列表` },
+  'settings.ignoreListHelp':  { en: `Filenames to skip during indexing. Case-sensitive, matches the filename only (not the full path).`, vi: `Các filename sẽ bỏ qua khi index. Phân biệt hoa thường, chỉ so khớp filename (không phải đường dẫn đầy đủ).`, zh: `索引时跳过的文件名。区分大小写，仅匹配文件名（不含完整路径）。` },
+  'settings.ignorePlaceholder': { en: `e.g. CLAUDE.md`, vi: `vd. CLAUDE.md`, zh: `例如 CLAUDE.md` },
+  'settings.ignoreDuplicate': { en: `Filename already in ignore list`, vi: `Filename đã có trong danh sách`, zh: `文件名已在忽略列表中` },
+
   // MCP
   'mcp.endpoint':      { en: `Endpoint`, vi: `Endpoint`, zh: `端点` },
   'mcp.claudeCode':    { en: `Claude Code`, vi: `Claude Code`, zh: `Claude Code` },
@@ -1092,6 +1124,10 @@ const STR = {
   'files.loadFail':    { en: `Failed to load files: {msg}`, vi: `Tải file thất bại: {msg}`, zh: `加载文件失败：{msg}` },
   'files.chunkOne':    { en: `{n} chunk`, vi: `{n} chunk`, zh: `{n} 个代码块` },
   'files.chunkMany':   { en: `{n} chunks`, vi: `{n} chunk`, zh: `{n} 个代码块` },
+  'files.ignore':      { en: `Ignore`, vi: `Ignore`, zh: `忽略` },
+  'files.ignoreTitle': { en: `Remove from index and skip in future indexing`, vi: `Xóa khỏi index và bỏ qua trong các lần index sau`, zh: `从索引中移除并在后续索引时跳过` },
+  'files.restore':     { en: `Restore`, vi: `Khôi phục`, zh: `恢复` },
+  'files.ignoredHeading': { en: `Ignored files`, vi: `File đã ignore`, zh: `已忽略的文件` },
   'chunk.loading':     { en: `Loading chunks…`, vi: `Đang tải chunk…`, zh: `正在加载代码块…` },
   'chunk.none':        { en: `No chunks stored for this file.`, vi: `Không có chunk nào được lưu cho file này.`, zh: `此文件没有存储任何代码块。` },
   'chunk.loadFail':    { en: `Failed to load chunks: {msg}`, vi: `Tải chunk thất bại: {msg}`, zh: `加载代码块失败：{msg}` },
@@ -1628,6 +1664,8 @@ function renderAll() {
   document.getElementById('mcp-tool-file-retrieval').checked = enabledTools.includes('file-retrieval');
   // Custom extensions
   renderExtensionList();
+  // Index ignore list
+  renderIgnoreList();
 }
 
 function escHtml(str) {
@@ -1804,6 +1842,49 @@ function handleAddExtension() {
 document.getElementById('form-add-extension').addEventListener('submit', handleAddExtension);
 document.getElementById('input-extension').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); handleAddExtension(); }
+});
+
+function renderIgnoreList() {
+  const container = document.getElementById('ignore-filenames-list');
+  container.innerHTML = '';
+  const filenames = cfg.index_ignore_filenames || [];
+  filenames.forEach((fname, idx) => {
+    const row = document.createElement('div');
+    row.className = 'flex items-center gap-2 border border-gray-200 dark:border-wiki-border rounded px-3 py-2 text-sm bg-white dark:bg-wiki-surface';
+    const display = document.createElement('span');
+    display.className = 'font-mono text-gray-800 dark:text-wiki-text flex-1';
+    display.textContent = fname;
+    const removeBtn = document.createElement('button');
+    removeBtn.textContent = t('action.remove');
+    removeBtn.className = 'text-xs text-gray-400 dark:text-wiki-text-muted hover:text-red-500 dark:hover:text-red-400 focus:outline-none focus:ring-2 focus:ring-red-300 rounded px-2 py-1';
+    removeBtn.addEventListener('click', () => {
+      cfg.index_ignore_filenames.splice(idx, 1);
+      renderIgnoreList();
+      saveNow();
+    });
+    row.appendChild(display);
+    row.appendChild(removeBtn);
+    container.appendChild(row);
+  });
+}
+
+function handleAddIgnore() {
+  const input = document.getElementById('input-ignore-filename');
+  const val = input.value.trim();
+  if (!val) return;
+  if (!cfg.index_ignore_filenames) cfg.index_ignore_filenames = [];
+  if (cfg.index_ignore_filenames.includes(val)) {
+    input.value = '';
+    return;
+  }
+  cfg.index_ignore_filenames.push(val);
+  input.value = '';
+  renderIgnoreList();
+  saveNow();
+}
+document.getElementById('form-add-ignore').addEventListener('submit', handleAddIgnore);
+document.getElementById('input-ignore-filename').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); handleAddIgnore(); }
 });
 
 document.getElementById('embedding-model').addEventListener('input', (e) => {
@@ -2500,6 +2581,7 @@ async function loadExplorer() {
     loadExplorerFiles(token),
     loadExplorerGraph(token),
   ]);
+  loadIgnoredFiles();
 }
 
 function setExplorerActionStatus(msg, isError) {
@@ -2625,15 +2707,49 @@ function renderFiles() {
 
   explorerFiles.forEach((f) => {
     const ext = fileExt(f.path);
-    const row = document.createElement('button');
-    row.className = 'w-full flex items-center gap-3 px-3 py-2 text-left text-sm hover:bg-gray-50 dark:hover:bg-wiki-surface/60 focus:outline-none focus:ring-2 focus:ring-blue-400';
-    row.innerHTML =
+    const row = document.createElement('div');
+    row.className = 'w-full flex items-center gap-3 px-3 py-2 text-left text-sm hover:bg-gray-50 dark:hover:bg-wiki-surface/60';
+    const fileBtn = document.createElement('button');
+    fileBtn.className = 'flex items-center gap-3 flex-1 min-w-0 text-left focus:outline-none focus:ring-2 focus:ring-blue-400 rounded';
+    fileBtn.innerHTML =
       '<span class="inline-block w-2 h-2 rounded-full flex-none" style="background:' + langColor(f.path) + '"></span>' +
       '<span class="font-mono text-gray-800 dark:text-wiki-text truncate flex-1" title="' + escHtml(f.path) + '">' + escHtml(relPath(f.path)) + '</span>' +
       '<span class="text-xs text-gray-400 dark:text-wiki-text-muted whitespace-nowrap">' + (LANG_LABELS[ext] || ext || '—') + '</span>' +
       '<span class="text-xs text-gray-400 dark:text-wiki-text-muted whitespace-nowrap">' + (f.chunks === 1 ? t('files.chunkOne', { n: f.chunks }) : t('files.chunkMany', { n: f.chunks })) + '</span>' +
       '<span class="text-xs text-gray-400 dark:text-wiki-text-muted whitespace-nowrap hidden sm:inline">' + fmtBytes(f.size) + '</span>';
-    row.addEventListener('click', () => openChunkDetail(f.path));
+    fileBtn.addEventListener('click', () => openChunkDetail(f.path));
+    const ignoreBtn = document.createElement('button');
+    ignoreBtn.className = 'text-xs text-gray-400 dark:text-wiki-text-muted hover:text-red-500 dark:hover:text-red-400 focus:outline-none focus:ring-2 focus:ring-red-300 rounded px-2 py-1 flex-none';
+    ignoreBtn.textContent = t('files.ignore');
+    ignoreBtn.title = t('files.ignoreTitle');
+    ignoreBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      ignoreBtn.disabled = true;
+      ignoreBtn.textContent = '…';
+      const repoId = encodeRepoId(currentSearchRepo);
+      try {
+        const res = await fetch('/api/repos/' + repoId + '/ignore-file', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: f.path }),
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          showError(d.error || 'ignore failed');
+          ignoreBtn.textContent = t('files.ignore');
+          ignoreBtn.disabled = false;
+          return;
+        }
+        row.remove();
+        loadIgnoredFiles();
+      } catch (err) {
+        showError(err.message);
+        ignoreBtn.textContent = t('files.ignore');
+        ignoreBtn.disabled = false;
+      }
+    });
+    row.appendChild(fileBtn);
+    row.appendChild(ignoreBtn);
     listEl.appendChild(row);
   });
 }
@@ -2647,6 +2763,62 @@ document.getElementById('input-file-filter').addEventListener('input', (e) => {
     loadExplorerFiles(token);
   }, 300);
 });
+
+// ─── Ignored files ────────────────────────────────────────────────────────────
+async function loadIgnoredFiles() {
+  if (!currentSearchRepo) return;
+  const repoId = encodeRepoId(currentSearchRepo);
+  const section = document.getElementById('ignored-files-section');
+  const listEl = document.getElementById('ignored-files-list');
+  try {
+    const res = await fetch('/api/repos/' + repoId + '/ignored-files');
+    if (!res.ok) { section.classList.add('hidden'); return; }
+    const data = await res.json();
+    const paths = data.paths || [];
+    if (paths.length === 0) { section.classList.add('hidden'); return; }
+    section.classList.remove('hidden');
+    listEl.innerHTML = '';
+    paths.forEach((relP) => {
+      const row = document.createElement('div');
+      row.className = 'flex items-center gap-3 px-3 py-2 text-sm';
+      const label = document.createElement('span');
+      label.className = 'font-mono text-gray-600 dark:text-wiki-text-muted truncate flex-1';
+      label.textContent = relP;
+      label.title = relP;
+      const restoreBtn = document.createElement('button');
+      restoreBtn.className = 'text-xs text-blue-600 dark:text-wiki-link hover:text-blue-800 dark:hover:text-wiki-heading focus:outline-none focus:ring-2 focus:ring-blue-400 rounded px-2 py-1 flex-none';
+      restoreBtn.textContent = t('files.restore');
+      restoreBtn.addEventListener('click', async () => {
+        restoreBtn.disabled = true;
+        restoreBtn.textContent = '…';
+        try {
+          const r = await fetch('/api/repos/' + repoId + '/unignore-file', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: relP }),
+          });
+          if (!r.ok) {
+            const d = await r.json().catch(() => ({}));
+            showError(d.error || 'restore failed');
+            restoreBtn.textContent = t('files.restore');
+            restoreBtn.disabled = false;
+            return;
+          }
+          loadIgnoredFiles();
+        } catch (err) {
+          showError(err.message);
+          restoreBtn.textContent = t('files.restore');
+          restoreBtn.disabled = false;
+        }
+      });
+      row.appendChild(label);
+      row.appendChild(restoreBtn);
+      listEl.appendChild(row);
+    });
+  } catch (_) {
+    section.classList.add('hidden');
+  }
+}
 
 // ─── Chunk detail panel ─────────────────────────────────────────────────────
 async function openChunkDetail(file) {

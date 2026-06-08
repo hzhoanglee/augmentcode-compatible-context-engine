@@ -9,14 +9,14 @@ use serde_json::Value;
 use tempfile::NamedTempFile;
 
 /// Bump this when a new migration is appended to MIGRATIONS.
-pub const CURRENT_VERSION: u32 = 5;
+pub const CURRENT_VERSION: u32 = 6;
 
 /// Migration function type: transforms a JSON Value from version N to version N+1.
 pub type MigrationFn = fn(Value) -> Result<Value, ConfigError>;
 
 /// Ordered list of migration functions. Each entry migrates from version N to N+1,
 /// where N is the index into this slice (0-based, so index 0 = v1→v2, etc.).
-pub const MIGRATIONS: &[MigrationFn] = &[migrate_v1_to_v2, migrate_v2_to_v3, migrate_v3_to_v4, migrate_v4_to_v5];
+pub const MIGRATIONS: &[MigrationFn] = &[migrate_v1_to_v2, migrate_v2_to_v3, migrate_v3_to_v4, migrate_v4_to_v5, migrate_v5_to_v6];
 
 /// v1→v2: introduce `data_dir` (Option<PathBuf>). The body is a no-op stamp —
 /// `serde(default)` already handles missing fields on deserialize, but we
@@ -68,7 +68,27 @@ fn migrate_v4_to_v5(mut value: Value) -> Result<Value, ConfigError> {
     Ok(value)
 }
 
+/// v5→v6: introduce `index_ignore_filenames` (Vec<String>). Defaults to
+/// CLAUDE.md and AGENTS.md — files typically consumed by AI agents that add
+/// noise to code search results.
+fn migrate_v5_to_v6(mut value: Value) -> Result<Value, ConfigError> {
+    if let Value::Object(ref mut obj) = value {
+        obj.entry("index_ignore_filenames".to_string())
+            .or_insert_with(|| {
+                Value::Array(vec![
+                    Value::String("CLAUDE.md".to_string()),
+                    Value::String("AGENTS.md".to_string()),
+                ])
+            });
+    }
+    Ok(value)
+}
+
 // ─── Settings ──────────────────────────────────────────────────────────────
+
+fn default_index_ignore_filenames() -> Vec<String> {
+    vec!["CLAUDE.md".to_string(), "AGENTS.md".to_string()]
+}
 
 fn default_embed_concurrency() -> usize {
     // Per-key concurrency: each API key is allowed this many concurrent
@@ -227,6 +247,9 @@ pub struct Settings {
     /// built-in `CODE_EXTENSIONS` list. E.g. `["prisma", "zig", "nim"]`.
     #[serde(default)]
     pub custom_extensions: Vec<String>,
+    /// Filenames to skip during indexing (case-sensitive, filename-only match).
+    #[serde(default = "default_index_ignore_filenames")]
+    pub index_ignore_filenames: Vec<String>,
 }
 
 impl Default for Settings {
@@ -243,6 +266,7 @@ impl Default for Settings {
             embeddings_dir: None,
             enabled_mcp_tools: default_enabled_mcp_tools(),
             custom_extensions: Vec::new(),
+            index_ignore_filenames: default_index_ignore_filenames(),
         }
     }
 }
@@ -644,6 +668,61 @@ mod tests {
             ed,
             home.path().join(".vibervn").join("context-engine").join("embeddings"),
             "default embeddings_dir must match historical layout for byte-identical default install"
+        );
+    }
+
+    #[test]
+    fn test_v5_to_v6_migration_injects_ignore_filenames() {
+        let home = TempDir::new().expect("tempdir");
+        let path = config_path(home.path());
+        fs::create_dir_all(path.parent().expect("has parent")).expect("create dirs");
+
+        let v5 = r#"{
+            "version": 5,
+            "repos": [],
+            "embedding": {"provider":"voyage","model":"voyage-4-lite","api_keys":[],"embed_concurrency":16},
+            "llm": {"provider":"google","rerank_model":"gemini-3.1-flash-lite","api_keys":[]},
+            "data_dir": null,
+            "embeddings_dir": null,
+            "enabled_mcp_tools": ["codebase-retrieval","file-retrieval"],
+            "custom_extensions": []
+        }"#;
+        fs::write(&path, v5).expect("write v5 settings.json");
+
+        let loaded = ensure_dir_and_load(home.path()).expect("load v5");
+        assert_eq!(loaded.version, CURRENT_VERSION);
+        assert_eq!(
+            loaded.index_ignore_filenames,
+            vec!["CLAUDE.md".to_string(), "AGENTS.md".to_string()],
+            "migration must inject default ignore filenames"
+        );
+    }
+
+    #[test]
+    fn test_v6_explicit_empty_ignore_not_clobbered() {
+        let home = TempDir::new().expect("tempdir");
+        let path = config_path(home.path());
+        fs::create_dir_all(path.parent().expect("has parent")).expect("create dirs");
+
+        let v6 = r#"{
+            "version": 6,
+            "repos": [],
+            "embedding": {"provider":"voyage","model":"voyage-4-lite","api_keys":[],"embed_concurrency":16},
+            "llm": {"provider":"google","rerank_model":"gemini-3.1-flash-lite","api_keys":[]},
+            "data_dir": null,
+            "embeddings_dir": null,
+            "enabled_mcp_tools": ["codebase-retrieval","file-retrieval"],
+            "custom_extensions": [],
+            "index_ignore_filenames": []
+        }"#;
+        fs::write(&path, v6).expect("write v6 settings.json");
+
+        let loaded = ensure_dir_and_load(home.path()).expect("load v6");
+        assert_eq!(loaded.version, CURRENT_VERSION);
+        assert!(
+            loaded.index_ignore_filenames.is_empty(),
+            "explicit empty list must not be overwritten by serde default; got: {:?}",
+            loaded.index_ignore_filenames
         );
     }
 }

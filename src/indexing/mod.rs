@@ -473,6 +473,12 @@ impl IndexEngine {
             .clone()
     }
 
+    /// Public accessor for the per-repo serialisation lock (used by server handlers
+    /// that need to mutate per-repo state without racing the consumer).
+    pub async fn get_repo_lock_public(&self, repo: &str) -> Arc<Mutex<()>> {
+        self.get_repo_lock(repo).await
+    }
+
     /// Search the resident vector shards for the top-k most similar chunks.
     ///
     /// Fan-out over resident shards + bounded global top-k merge (scores are
@@ -676,6 +682,11 @@ async fn run_consumer(
             }
         };
 
+        // Read per-repo ignored paths from index_meta (fresh each run).
+        let per_repo_ignored_paths = store::ops::get_ignored_paths(&db)
+            .await
+            .unwrap_or_default();
+
         // Mask API keys for event display.
         let key_hints: Vec<String> = settings_ref
             .embedding
@@ -720,6 +731,8 @@ async fn run_consumer(
 
             IndexPipeline::new_with_concurrency(repo.clone(), voyage_client, embed_concurrency, embed_cache)
                 .with_extra_extensions(settings_ref.custom_extensions.clone())
+                .with_ignore_filenames(settings_ref.index_ignore_filenames.clone())
+                .with_ignore_paths(per_repo_ignored_paths)
         };
 
         match pipeline

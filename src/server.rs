@@ -177,6 +177,9 @@ pub fn build_router(
         .route("/api/repos/:repo_id/status", get(get_repo_status))
         .route("/api/repos/:repo_id/index-stats", get(get_index_stats))
         .route("/api/repos/:repo_id/files", get(get_repo_files))
+        .route("/api/repos/:repo_id/ignore-file", post(post_ignore_file))
+        .route("/api/repos/:repo_id/unignore-file", post(post_unignore_file))
+        .route("/api/repos/:repo_id/ignored-files", get(get_ignored_files))
         .route("/api/repos/:repo_id/graph", get(get_repo_graph))
         .route("/api/repos/:repo_id/chunks", get(get_repo_chunks))
         .route("/api/repos/:repo_id/index-events", get(get_index_events))
@@ -604,6 +607,130 @@ async fn get_repo_files(
         }
         Err(e) => db_error("list files", e),
     }
+}
+
+/// POST /api/repos/:repo_id/ignore-file — ignore a file (delete from index + add to ignore list).
+async fn post_ignore_file(
+    State(state): State<AppState>,
+    Path(repo_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let repo = match decode_repo_id(&repo_id) {
+        Ok(r) => r,
+        Err(r) => return r,
+    };
+    let file_path = match body.get("path").and_then(|v| v.as_str()) {
+        Some(p) => p.to_string(),
+        None => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "missing 'path' field" }))).into_response();
+        }
+    };
+
+    // Derive relative path via strip_prefix, then normalize to forward slashes.
+    let relative = {
+        let abs = std::path::Path::new(&file_path);
+        let root = std::path::Path::new(&repo);
+        match abs.strip_prefix(root) {
+            Ok(rel) => rel.to_str().unwrap_or("").replace('\\', "/"),
+            Err(_) => {
+                return (StatusCode::BAD_REQUEST, Json(json!({ "error": "path is not inside repo" }))).into_response();
+            }
+        }
+    };
+    if relative.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "empty relative path" }))).into_response();
+    }
+
+    // Acquire per-repo lock (same lock the pipeline consumer uses).
+    let lock = state.index_engine.get_repo_lock_public(&repo).await;
+    let _guard = lock.lock().await;
+
+    // Open DB handle.
+    let db = match store::get_or_open(&state.repo_dbs, &state.data_dir, &repo).await {
+        Ok(d) => d,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("db: {e}") }))).into_response();
+        }
+    };
+
+    // 1. Delete file data from DB (includes file_meta, chunks, symbols, edges, raw_edge).
+    if let Err(e) = store::ops::delete_files_data_bulk(&db, std::slice::from_ref(&file_path)).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("delete: {e}") }))).into_response();
+    }
+
+    // 2. Evict vectors from the in-memory shard.
+    {
+        let mut vi = state.index_engine.vector_index.write().await;
+        vi.apply_incremental(&repo, &[file_path], &[], &[]);
+    }
+
+    // 3. Append relative path to per-repo ignored_paths.
+    let mut ignored = store::ops::get_ignored_paths(&db).await.unwrap_or_default();
+    if !ignored.contains(&relative) {
+        ignored.push(relative.clone());
+        if let Err(e) = store::ops::set_ignored_paths(&db, &ignored).await {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("set ignored: {e}") }))).into_response();
+        }
+    }
+
+    Json(json!({ "status": "ok", "ignored": relative })).into_response()
+}
+
+/// POST /api/repos/:repo_id/unignore-file — restore a file (remove from ignore list).
+async fn post_unignore_file(
+    State(state): State<AppState>,
+    Path(repo_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let repo = match decode_repo_id(&repo_id) {
+        Ok(r) => r,
+        Err(r) => return r,
+    };
+    let relative = match body.get("path").and_then(|v| v.as_str()) {
+        Some(p) => p.to_string(),
+        None => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "missing 'path' field" }))).into_response();
+        }
+    };
+
+    // Acquire per-repo lock (same as ignore handler and pipeline consumer).
+    let lock = state.index_engine.get_repo_lock_public(&repo).await;
+    let _guard = lock.lock().await;
+
+    let db = match store::get_or_open(&state.repo_dbs, &state.data_dir, &repo).await {
+        Ok(d) => d,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("db: {e}") }))).into_response();
+        }
+    };
+
+    let mut ignored = store::ops::get_ignored_paths(&db).await.unwrap_or_default();
+    ignored.retain(|p| p != &relative);
+    if let Err(e) = store::ops::set_ignored_paths(&db, &ignored).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("set ignored: {e}") }))).into_response();
+    }
+
+    Json(json!({ "status": "ok" })).into_response()
+}
+
+/// GET /api/repos/:repo_id/ignored-files — list per-repo ignored paths.
+async fn get_ignored_files(
+    State(state): State<AppState>,
+    Path(repo_id): Path<String>,
+) -> Response {
+    let repo = match decode_repo_id(&repo_id) {
+        Ok(r) => r,
+        Err(r) => return r,
+    };
+    let db = match store::get_or_open(&state.repo_dbs, &state.data_dir, &repo).await {
+        Ok(d) => d,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("db: {e}") }))).into_response();
+        }
+    };
+
+    let ignored = store::ops::get_ignored_paths(&db).await.unwrap_or_default();
+    Json(json!({ "paths": ignored })).into_response()
 }
 
 /// GET /api/repos/:repo_id/graph — bounded call-graph node-link payload.
