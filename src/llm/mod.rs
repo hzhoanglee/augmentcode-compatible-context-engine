@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use anyhow::{Result, bail};
 use reqwest::Client;
+use tracing::warn;
 use crate::config::LlmConfig;
 
 #[derive(Clone)]
@@ -44,11 +45,6 @@ impl LlmClient {
         })
     }
 
-    fn next_key(&self) -> &str {
-        let idx = self.key_cursor.fetch_add(1, Ordering::Relaxed) % self.api_keys.len();
-        &self.api_keys[idx]
-    }
-
     /// Whether this client will request native JSON output for reranking.
     /// True only when the setting is enabled AND the provider supports it; when
     /// the setting is on but the provider lacks a JSON mode, logs a warning once
@@ -69,13 +65,51 @@ impl LlmClient {
         }
     }
 
-    /// Send a completion request to the configured LLM provider.
-    /// When `structured` is true, requests the provider's native JSON output mode.
-    pub async fn complete(&self, system: &str, user: &str, temperature: f32, structured: bool) -> Result<String> {
+    /// Dispatch to the provider-specific completion function.
+    async fn call_provider(&self, system: &str, user: &str, temperature: f32, structured: bool, key: &str) -> Result<String> {
         match self.provider.as_str() {
-            "google" => google::complete(&self.http, &self.model, self.next_key(), system, user, temperature, structured).await,
-            "openai" => openai::complete(&self.http, &self.model, self.next_key(), system, user, temperature, structured).await,
+            "google" => google::complete(&self.http, &self.model, key, system, user, temperature, structured).await,
+            "openai" => openai::complete(&self.http, &self.model, key, system, user, temperature, structured).await,
             other => bail!("unsupported LLM provider: {other}"),
         }
+    }
+
+    /// Send a completion request to the configured LLM provider.
+    /// Rotates through all keys on failure; backs off 2s and retries once more
+    /// before returning the last error.
+    pub async fn complete(&self, system: &str, user: &str, temperature: f32, structured: bool) -> Result<String> {
+        let n_keys = self.api_keys.len();
+        let start_cursor = self.key_cursor.fetch_add(1, Ordering::Relaxed) % n_keys;
+
+        let mut last_err = None;
+
+        // First pass — try each key once.
+        for offset in 0..n_keys {
+            let key_idx = (start_cursor + offset) % n_keys;
+            let key = &self.api_keys[key_idx];
+            match self.call_provider(system, user, temperature, structured, key).await {
+                Ok(response) => return Ok(response),
+                Err(e) => {
+                    warn!(key_index = key_idx, error = %e, "LLM call failed — trying next key");
+                    last_err = Some(e);
+                }
+            }
+        }
+
+        // All keys failed — backoff 2s and retry once more.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        for offset in 0..n_keys {
+            let key_idx = (start_cursor + offset) % n_keys;
+            let key = &self.api_keys[key_idx];
+            match self.call_provider(system, user, temperature, structured, key).await {
+                Ok(response) => return Ok(response),
+                Err(e) => {
+                    last_err = Some(e);
+                }
+            }
+        }
+
+        Err(last_err.unwrap())
     }
 }
