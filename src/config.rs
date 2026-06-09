@@ -530,6 +530,25 @@ pub fn ensure_dir_and_load(home_dir: &Path) -> Result<Settings, ConfigError> {
         s
     };
 
+    // Normalize repo paths (OS-native separators + case-fold on Windows) and
+    // deduplicate. Handles pre-existing mixed-case entries from before the
+    // normalization fix — e.g. both "D:\Projects\Foo" and "d:\projects\foo" collapse
+    // to a single entry. Persist the cleaned list so duplicates don't reappear.
+    let mut settings = settings;
+    let original_repos = settings.repos.clone();
+    {
+        let mut seen = std::collections::HashSet::new();
+        settings.repos = settings
+            .repos
+            .iter()
+            .map(|r| crate::store::normalize_repo_path(r))
+            .filter(|r| seen.insert(r.clone()))
+            .collect();
+    }
+    if settings.repos != original_repos {
+        let _ = write_settings_atomic(&path, &settings);
+    }
+
     Ok(settings)
 }
 
