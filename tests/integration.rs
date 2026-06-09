@@ -145,7 +145,11 @@ async fn test_put_round_trips() {
     let get_body: Settings = get_res.json().await.expect("parse GET response");
 
     assert_eq!(put_body, get_body, "PUT response and subsequent GET should be equal");
-    assert_eq!(get_body.repos, vec!["/home/user/myproject", "/home/user/other"]);
+    let expected_repos: Vec<String> = vec!["/home/user/myproject", "/home/user/other"]
+        .into_iter()
+        .map(|r| context_engine_rs::store::normalize_repo_path(r))
+        .collect();
+    assert_eq!(get_body.repos, expected_repos);
     assert_eq!(get_body.embedding.model, "voyage-code-3");
     assert_eq!(get_body.llm.rerank_model, "gemini-2.0-flash");
     assert_eq!(get_body.version, 6);
@@ -329,13 +333,14 @@ async fn test_put_repo_registers_status() {
     assert_eq!(status_res.status().as_u16(), 200);
 
     let statuses: Vec<serde_json::Value> = status_res.json().await.expect("parse status response");
+    let normalized = context_engine_rs::store::normalize_repo_path(&repo_path);
     let found = statuses.iter().any(|s| {
-        s["repo"].as_str().map(|r| r == repo_path).unwrap_or(false)
+        s["repo"].as_str().map(|r| r == normalized).unwrap_or(false)
     });
 
     assert!(
         found,
-        "Expected a status entry for {repo_path} but got: {statuses:?}"
+        "Expected a status entry for {normalized} but got: {statuses:?}"
     );
 }
 
@@ -389,7 +394,7 @@ async fn test_cancel_index_and_reindex() {
     assert_eq!(put_res.status().as_u16(), 200);
 
     let repo_id = encode_repo_id(&repo_path);
-
+    let normalized_repo = context_engine_rs::store::normalize_repo_path(&repo_path);
     // Spawn a background task that collects SSE events from the index-events endpoint.
     let sse_addr = addr;
     let sse_repo_id = repo_id.clone();
@@ -457,7 +462,7 @@ async fn test_cancel_index_and_reindex() {
             .await
             .expect("status");
         let statuses: Vec<serde_json::Value> = status_res.json().await.expect("parse");
-        if let Some(s) = statuses.iter().find(|s| s["repo"].as_str() == Some(&repo_path)) {
+        if let Some(s) = statuses.iter().find(|s| s["repo"].as_str() == Some(normalized_repo.as_str())) {
             if s["state"].as_str() == Some("idle") {
                 back_to_idle = true;
                 break;
@@ -509,7 +514,7 @@ async fn test_cancel_index_and_reindex() {
             .await
             .expect("status");
         let statuses: Vec<serde_json::Value> = status_res.json().await.expect("parse");
-        if let Some(s) = statuses.iter().find(|s| s["repo"].as_str() == Some(&repo_path)) {
+        if let Some(s) = statuses.iter().find(|s| s["repo"].as_str() == Some(normalized_repo.as_str())) {
             let state = s["state"].as_str().unwrap_or("");
             if state == "indexing" || (state == "idle" && s["indexed_files"].as_u64().unwrap_or(0) > 0) {
                 reindex_started = true;

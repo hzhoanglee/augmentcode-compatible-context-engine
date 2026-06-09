@@ -29,6 +29,19 @@ pub const DB_SCHEMA_VERSION_KEY: &str = "db_schema_version";
 /// Shared, process-wide map of one open SurrealDB handle per repo path.
 pub type RepoDbMap = Arc<RwLock<HashMap<String, Surreal<Db>>>>;
 
+/// Normalize a repo path to a canonical form for use as a HashMap/gate key.
+/// On Windows: lowercase + backslash separators (NTFS is case-insensitive).
+/// On Unix: forward slashes only (case-sensitive filesystems — no case fold).
+/// Trailing separators are stripped on both platforms.
+pub fn normalize_repo_path(repo: &str) -> String {
+    let s = if cfg!(windows) {
+        repo.replace('/', "\\").to_lowercase()
+    } else {
+        repo.replace('\\', "/")
+    };
+    s.trim_end_matches(['/', '\\']).to_string()
+}
+
 /// Sanitize a repo path to a safe directory name (max 64 chars).
 pub fn sanitize_repo_name(repo_path: &str) -> String {
     let sanitized: String = repo_path
@@ -656,11 +669,12 @@ fn open_gate(repo: &str) -> Arc<Mutex<()>> {
 /// the only thing keeping the LOCK alive is the async shutdown, which the retry
 /// loop waits out. Returns `true` if the directory is gone on return.
 pub async fn remove_index_dir(data_dir: &Path, repo: &str) -> bool {
-    let path = db_path(data_dir, repo);
+    let repo = normalize_repo_path(repo);
+    let path = db_path(data_dir, &repo);
 
     // Serialize against open_db for this repo. Held across every retry so no
     // re-index can recreate/open the directory mid-removal.
-    let gate = open_gate(repo);
+    let gate = open_gate(&repo);
     let _open_guard = gate.lock().await;
 
     if !path.exists() {
@@ -695,8 +709,9 @@ pub async fn get_or_open(
     data_dir: &Path,
     repo: &str,
 ) -> Result<Surreal<Db>> {
+    let repo = &normalize_repo_path(repo);
     // Fast path: already cached.
-    if let Some(db) = repo_dbs.read().await.get(repo) {
+    if let Some(db) = repo_dbs.read().await.get(repo.as_str()) {
         return Ok(db.clone());
     }
 
@@ -746,14 +761,15 @@ pub async fn open_if_indexed(
     data_dir: &Path,
     repo: &str,
 ) -> Result<Option<Surreal<Db>>> {
+    let repo = normalize_repo_path(repo);
     // A cached handle means it's open regardless of the on-disk check below.
-    if let Some(db) = repo_dbs.read().await.get(repo) {
+    if let Some(db) = repo_dbs.read().await.get(repo.as_str()) {
         return Ok(Some(db.clone()));
     }
-    if !db_path(data_dir, repo).exists() {
+    if !db_path(data_dir, &repo).exists() {
         return Ok(None);
     }
-    get_or_open(repo_dbs, data_dir, repo).await.map(Some)
+    get_or_open(repo_dbs, data_dir, &repo).await.map(Some)
 }
 
 

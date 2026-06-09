@@ -204,6 +204,7 @@ fn decode_repo_id(repo_id: &str) -> Result<String, Response> {
         .decode(repo_id)
         .ok()
         .and_then(|b| String::from_utf8(b).ok())
+        .map(|s| crate::store::normalize_repo_path(&s))
         .ok_or_else(|| {
             let body = json!({ "error": "invalid repo_id encoding" });
             (StatusCode::BAD_REQUEST, Json(body)).into_response()
@@ -280,6 +281,13 @@ async fn put_config(
 
     // Server always stamps the current version regardless of what the client sent.
     settings.version = CURRENT_VERSION;
+
+    // Normalize repo paths to OS-native separators so D:/foo and D:\foo unify.
+    settings.repos = settings
+        .repos
+        .iter()
+        .map(|r| crate::store::normalize_repo_path(r))
+        .collect();
 
     let target = config_path(&state.home_dir);
 
@@ -897,11 +905,12 @@ async fn post_query(
             return (StatusCode::BAD_REQUEST, Json(body)).into_response();
         }
     };
+    let repo_filter = crate::store::normalize_repo_path(repo_filter);
 
     match query::run_query(
         &req.query,
         top_k,
-        Some(repo_filter),
+        Some(&repo_filter),
         &voyage_client,
         &state.index_engine,
         &state.repo_dbs,

@@ -613,6 +613,7 @@ pub async fn run_codebase_retrieval(
                 (repository) root directory."
             .to_string();
     }
+    let repo = &crate::store::normalize_repo_path(repo);
 
     // 2. Auto-register the repo if it is not yet configured.
     if !settings.repos.iter().any(|r| r == repo) {
@@ -1407,6 +1408,7 @@ pub async fn run_file_retrieval(
     if repo.is_empty() {
         return "Error: workspace_full_path is required.".to_string();
     }
+    let repo = &crate::store::normalize_repo_path(repo);
     let file_path = file_path.trim();
     if file_path.is_empty() {
         return "Error: file_path is required.".to_string();

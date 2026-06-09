@@ -204,14 +204,15 @@ pub(crate) async fn seed_statuses_from_db(
     repos: &[String],
 ) {
     for repo in repos {
-        let db = match store::get_or_open(repo_dbs, data_dir, repo).await {
+        let repo = crate::store::normalize_repo_path(repo);
+        let db = match store::get_or_open(repo_dbs, data_dir, &repo).await {
             Ok(db) => db,
             Err(e) => {
                 warn!(repo = %repo, error = %format!("{e:#}"), "failed to open DB for status seed; skipping repo");
                 continue;
             }
         };
-        let indexed = match store::ops::count_indexed_files(&db, repo).await {
+        let indexed = match store::ops::count_indexed_files(&db, &repo).await {
             Ok(n) => n,
             Err(e) => {
                 warn!(repo = %repo, error = %e, "failed to count indexed files for status seed; skipping repo");
@@ -289,7 +290,7 @@ impl IndexEngine {
         {
             let mut statuses = engine.statuses.write().await;
             for repo in &settings.repos {
-                statuses.insert(repo.clone(), RepoStatus::default());
+                statuses.insert(crate::store::normalize_repo_path(repo), RepoStatus::default());
             }
         }
 
@@ -311,7 +312,7 @@ impl IndexEngine {
         // Start watcher for each repo.
         for repo in settings.repos.clone() {
             let tx = trigger_tx.clone();
-            let repo_path = repo.clone();
+            let repo_path = crate::store::normalize_repo_path(&repo);
             tokio::spawn(async move {
                 start_watcher(repo_path, tx).await;
             });
@@ -333,15 +334,16 @@ impl IndexEngine {
     /// boot. Idempotent: if the repo already has a status entry, this is a no-op
     /// (avoids spawning a duplicate watcher).
     pub async fn register_repo(&self, repo: &str) {
+        let repo = crate::store::normalize_repo_path(repo);
         {
             let mut statuses = self.statuses.write().await;
-            if statuses.contains_key(repo) {
+            if statuses.contains_key(&repo) {
                 return; // already registered — don't spawn a second watcher
             }
-            statuses.insert(repo.to_string(), RepoStatus::default());
+            statuses.insert(repo.clone(), RepoStatus::default());
         }
         let tx = self.trigger_tx.clone();
-        let repo_path = repo.to_string();
+        let repo_path = repo;
         tokio::spawn(async move {
             start_watcher(repo_path, tx).await;
         });
@@ -351,7 +353,7 @@ impl IndexEngine {
     pub async fn trigger_index(&self, repo: &str) -> Result<()> {
         self.trigger_tx
             .send(IndexTrigger {
-                repo: repo.to_string(),
+                repo: crate::store::normalize_repo_path(repo),
                 changes: None,
                 rebuild: false,
             })
@@ -364,7 +366,7 @@ impl IndexEngine {
     pub async fn trigger_rebuild(&self, repo: &str) -> Result<()> {
         self.trigger_tx
             .send(IndexTrigger {
-                repo: repo.to_string(),
+                repo: crate::store::normalize_repo_path(repo),
                 changes: None,
                 rebuild: true,
             })
@@ -388,7 +390,8 @@ impl IndexEngine {
 
     /// Return status for a single repo.
     pub async fn repo_status(&self, repo: &str) -> Option<RepoStatus> {
-        self.statuses.read().await.get(repo).cloned()
+        let repo = crate::store::normalize_repo_path(repo);
+        self.statuses.read().await.get(&repo).cloned()
     }
 
     /// Clear all in-memory index state for a repo after its on-disk index has
@@ -397,13 +400,14 @@ impl IndexEngine {
     /// removed — so the existing filesystem watcher registration is preserved and
     /// a later `register_repo` can't spawn a duplicate watcher.
     pub async fn clear_repo_index(&self, repo: &str) {
+        let repo = crate::store::normalize_repo_path(repo);
         {
             let mut statuses = self.statuses.write().await;
-            if let Some(s) = statuses.get_mut(repo) {
+            if let Some(s) = statuses.get_mut(&repo) {
                 *s = RepoStatus::default();
             }
         }
-        self.vector_index.write().await.remove_repo(repo);
+        self.vector_index.write().await.remove_repo(&repo);
     }
 
     /// Cancel indexing, wait for the pipeline to finish, then remove the cached
@@ -413,36 +417,38 @@ impl IndexEngine {
     ///
     /// Returns once the handle has been removed and no pipeline holds it.
     pub async fn close_repo_db(&self, repo: &str) {
+        let repo = crate::store::normalize_repo_path(repo);
         // 1. Cancel any in-progress run so it exits early.
-        self.cancel_index(repo).await;
+        self.cancel_index(&repo).await;
 
         // 2. Acquire the per-repo lock — blocks until the consumer's current
         //    iteration for this repo finishes (including dropping its `db` clone).
-        let lock = self.get_repo_lock(repo).await;
+        let lock = self.get_repo_lock(&repo).await;
         let _guard = lock.lock().await;
 
         // 3. Under the lock, remove the cached handle. No one else can open a
         //    new one for this repo while we hold the lock (the consumer is the
         //    only other caller of get_or_open, and it needs this same lock).
         let mut map = self.repo_dbs.write().await;
-        map.remove(repo);
+        map.remove(&repo);
     }
 
     /// Cancel an in-progress indexing run for a repo. Returns true if the repo
     /// was actively indexing and the cancellation signal was sent.
     pub async fn cancel_index(&self, repo: &str) -> bool {
+        let repo = crate::store::normalize_repo_path(repo);
         // Only cancel if the repo is actually in 'indexing' state — avoids a
         // TOCTOU race where the pipeline finishes between Ok(stats) and
         // clear_cancel_token, making the token still present but the run done.
         let is_indexing = {
             let statuses = self.statuses.read().await;
-            statuses.get(repo).map(|s| s.state == IndexState::Indexing).unwrap_or(false)
+            statuses.get(&repo).map(|s| s.state == IndexState::Indexing).unwrap_or(false)
         };
         if !is_indexing {
             return false;
         }
         let mut tokens = self.cancel_tokens.lock().await;
-        if let Some(token) = tokens.remove(repo) {
+        if let Some(token) = tokens.remove(&repo) {
             token.cancel();
             true
         } else {
@@ -859,11 +865,12 @@ mod load_repos_tests {
     async fn seed_file_meta(repo_dbs: &RepoDbMap, home: &std::path::Path, repo: &str, n: usize) {
         let db = store::get_or_open(repo_dbs, home, repo).await.expect("get_or_open");
         for i in 0..n {
-            let q = format!(
-                "CREATE file_meta SET path = '{repo}/f{i}.rs', mtime = 0, size = 1, \
-                 repo = '{repo}', chunk_count = 1;"
-            );
-            db.query(&q).await.expect("seed file_meta");
+            let path = format!("{repo}/f{i}.rs");
+            db.query("CREATE file_meta SET path = $path, mtime = 0, size = 1, repo = $repo, chunk_count = 1;")
+                .bind(("path", path))
+                .bind(("repo", repo.to_string()))
+                .await
+                .expect("seed file_meta");
         }
     }
 
@@ -873,8 +880,10 @@ mod load_repos_tests {
     #[tokio::test]
     async fn seeds_status_from_persisted_file_meta() {
         let home = TempDir::new().expect("tempdir");
-        let indexed = "/proj/indexed".to_string();
-        let empty = "/proj/empty".to_string();
+        let indexed_raw = "/proj/indexed".to_string();
+        let empty_raw = "/proj/empty".to_string();
+        let indexed = store::normalize_repo_path(&indexed_raw);
+        let empty = store::normalize_repo_path(&empty_raw);
 
         // Shared map for seeding AND the seed-status call — one handle per repo.
         let repo_dbs: RepoDbMap = Arc::new(RwLock::new(HashMap::new()));
@@ -890,7 +899,7 @@ mod load_repos_tests {
             m.insert(empty.clone(), RepoStatus::default());
         }
 
-        seed_statuses_from_db(&statuses, &repo_dbs, home.path(), &[indexed.clone(), empty.clone()])
+        seed_statuses_from_db(&statuses, &repo_dbs, home.path(), &[indexed_raw, empty_raw])
             .await;
 
         let m = statuses.read().await;
@@ -903,7 +912,8 @@ mod load_repos_tests {
     #[tokio::test]
     async fn seed_does_not_clobber_live_run() {
         let home = TempDir::new().expect("tempdir");
-        let repo = "/proj/live".to_string();
+        let repo_raw = "/proj/live".to_string();
+        let repo = store::normalize_repo_path(&repo_raw);
         let repo_dbs: RepoDbMap = Arc::new(RwLock::new(HashMap::new()));
         seed_file_meta(&repo_dbs, home.path(), &repo, 5).await;
 
@@ -917,7 +927,7 @@ mod load_repos_tests {
             );
         }
 
-        seed_statuses_from_db(&statuses, &repo_dbs, home.path(), &[repo.clone()]).await;
+        seed_statuses_from_db(&statuses, &repo_dbs, home.path(), &[repo_raw]).await;
 
         let m = statuses.read().await;
         assert_eq!(m[&repo].state, IndexState::Indexing, "in-flight run must survive the seed");
