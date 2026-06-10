@@ -594,11 +594,10 @@ async fn run_agentic_loop<B: AgenticBackend>(
             break;
         }
 
-        // Always force tool use — the agent must never respond with prose. It
-        // should only call add_chunks or query. The loop terminates via budget
-        // limits (char cap, query cap, iteration cap, byte cap), not via a text
-        // response from the model.
-        let force_tool_use = true;
+        // Force tool use unless we just injected a nudge that allows [DONE] text.
+        // After add_chunks, the model may respond [DONE] if it has enough info,
+        // so we allow text responses in that case.
+        let force_tool_use = !awaiting_query;
         let result = backend.next_turn(system, &messages, &tools, force_tool_use).await;
 
         match result {

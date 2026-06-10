@@ -277,6 +277,7 @@ pub async fn complete_with_tools(
     force_tool_use: bool,
     prompt_cache_key: Option<&str>,
     base_url: Option<&str>,
+    force_tool_use_on_custom: bool,
 ) -> Result<ToolTurnResult> {
     let url = chat_url(base_url);
 
@@ -333,7 +334,7 @@ pub async fn complete_with_tools(
         tools: Some(openai_tools),
         tool_choice: if force_tool_use {
             let is_custom = base_url.is_some_and(|u| !u.trim().is_empty());
-            Some(if is_custom { "auto".to_owned() } else { "required".to_owned() })
+            Some(if !is_custom || force_tool_use_on_custom { "required".to_owned() } else { "auto".to_owned() })
         } else {
             None
         },

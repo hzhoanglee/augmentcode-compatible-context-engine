@@ -69,6 +69,8 @@ pub struct LlmClient {
     /// client falls back to `api.openai.com`. Normalization (base form vs
     /// full URL) happens centrally in `openai::chat_url`.
     openai_base_url: Option<String>,
+    /// Send `tool_choice: "required"` even for custom OpenAI endpoints.
+    openai_force_tool_use: bool,
 }
 
 /// Whether `provider` has a native JSON output mode the reranker can request.
@@ -101,6 +103,7 @@ impl LlmClient {
             key_cursor: std::sync::Arc::new(AtomicUsize::new(0)),
             use_structured_output: config.use_structured_output,
             openai_base_url: config.openai_base_url.clone(),
+            openai_force_tool_use: config.openai_force_tool_use,
         })
     }
 
@@ -205,7 +208,7 @@ impl LlmClient {
                 }
             }
             "openai" => {
-                let r = openai::complete_with_tools(&self.http, &self.model, key, system, contents, tools, temperature, force_tool_use, prompt_cache_key, self.openai_base_url.as_deref()).await?;
+                let r = openai::complete_with_tools(&self.http, &self.model, key, system, contents, tools, temperature, force_tool_use, prompt_cache_key, self.openai_base_url.as_deref(), self.openai_force_tool_use).await?;
                 match r {
                     openai::ToolTurnResult::Text(t) => Ok(ToolTurnResult::Text(t)),
                     openai::ToolTurnResult::ToolCalls(calls) => Ok(ToolTurnResult::ToolCalls(

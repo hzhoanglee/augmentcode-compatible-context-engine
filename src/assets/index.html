@@ -333,6 +333,17 @@
             Custom OpenAI-compatible endpoint (Ollama, LM Studio, OpenRouter, Azure, vLLM, etc.). Leave blank to use api.openai.com. Accepts either the base form (…/v1) or the full /chat/completions URL.
           </p>
         </div>
+        <div id="llm-openai-force-tool-use-wrapper" class="mb-4 hidden">
+          <label class="flex items-center gap-2 text-xs font-medium text-gray-500 dark:text-wiki-text-muted cursor-pointer">
+            <input id="llm-openai-force-tool-use" type="checkbox"
+                   class="h-4 w-4 rounded border-gray-300 dark:border-wiki-border text-blue-600
+                          focus:outline-none focus:ring-2 focus:ring-blue-400" />
+            <span data-i18n="llm.openaiForceToolUse">Force tool_choice: required</span>
+          </label>
+          <p data-i18n="llm.openaiForceToolUseHelp" class="mt-1 text-xs text-gray-400 dark:text-wiki-text-muted">
+            Send tool_choice: "required" to the custom endpoint. Enable if your endpoint supports it (OpenRouter, vLLM, Together, etc.). Improves agentic RAG reliability.
+          </p>
+        </div>
         <div class="mb-4">
           <label data-i18n="llm.rerankModel" class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1" for="llm-rerank-model">
             Rerank model
@@ -1140,6 +1151,10 @@ const STR = {
                          vi: `Endpoint OpenAI-compatible tùy chỉnh (Ollama, LM Studio, OpenRouter, Azure, vLLM, v.v.). Để trống để dùng api.openai.com. Chấp nhận dạng base (…/v1) hoặc URL /chat/completions đầy đủ.`,
                          zh: `自定义 OpenAI 兼容 endpoint（Ollama、LM Studio、OpenRouter、Azure、vLLM 等）。留空则使用 api.openai.com。可填 base 形式 (…/v1) 或完整的 /chat/completions URL。` },
   'llm.openaiBaseUrlPlaceholder': { en: `https://api.openai.com/v1`, vi: `https://api.openai.com/v1`, zh: `https://api.openai.com/v1` },
+  'llm.openaiForceToolUse': { en: `Force tool_choice: required`, vi: `Force tool_choice: required`, zh: `Force tool_choice: required` },
+  'llm.openaiForceToolUseHelp': { en: `Send tool_choice: "required" to the custom endpoint. Enable if your endpoint supports it (OpenRouter, vLLM, Together, etc.). Improves agentic RAG reliability.`,
+                         vi: `Gửi tool_choice: "required" đến custom endpoint. Bật nếu endpoint hỗ trợ (OpenRouter, vLLM, Together, v.v.). Cải thiện độ tin cậy agentic RAG.`,
+                         zh: `向自定义 endpoint 发送 tool_choice: "required"。如果您的 endpoint 支持（OpenRouter、vLLM、Together 等），请启用。提高 agentic RAG 可靠性。` },
   'settings.setupHint':{ en: `Add an embedding API key below to start indexing repositories.`, vi: `Thêm embedding API key bên dưới để bắt đầu index repo.`, zh: `在下方添加嵌入 API 密钥即可开始索引仓库。` },
   'settings.mcpTools': { en: `MCP Tools`, vi: `MCP Tools`, zh: `MCP 工具` },
   'settings.mcpToolsHelp': { en: `Choose which MCP tools are exposed to clients. Disabled tools are hidden from tool lists.`, vi: `Chọn MCP tool nào được expose cho client. Tool bị tắt sẽ ẩn khỏi danh sách tool.`, zh: `选择向客户端公开哪些 MCP 工具。禁用的工具将从工具列表中隐藏。` },
@@ -1728,6 +1743,9 @@ function renderAll() {
   document.getElementById('llm-agentic-max-chunk-chars-wrapper').classList.toggle('hidden', !(cfg.llm.agentic_rag ?? false));
   document.getElementById('llm-openai-base-url').value = cfg.llm.openai_base_url || '';
   document.getElementById('llm-openai-base-url-wrapper').classList.toggle('hidden', (cfg.llm.provider || 'google') !== 'openai');
+  document.getElementById('llm-openai-force-tool-use').checked = cfg.llm.openai_force_tool_use ?? false;
+  const showForceToolUse = (cfg.llm.provider || 'google') === 'openai' && !!(cfg.llm.openai_base_url || '').trim();
+  document.getElementById('llm-openai-force-tool-use-wrapper').classList.toggle('hidden', !showForceToolUse);
   renderKeyList('llm-keys-list', cfg.llm.api_keys, (idx) => {
     cfg.llm.api_keys.splice(idx, 1);
     renderAll();
@@ -2022,6 +2040,8 @@ document.getElementById('llm-provider').addEventListener('change', (e) => {
   if (cfg) {
     cfg.llm.provider = e.target.value;
     document.getElementById('llm-openai-base-url-wrapper').classList.toggle('hidden', e.target.value !== 'openai');
+    const showForce = e.target.value === 'openai' && !!(cfg.llm.openai_base_url || '').trim();
+    document.getElementById('llm-openai-force-tool-use-wrapper').classList.toggle('hidden', !showForce);
     saveNow();
   }
 });
@@ -2029,7 +2049,14 @@ document.getElementById('llm-openai-base-url').addEventListener('input', (e) => 
   if (!cfg) return;
   const v = e.target.value.trim();
   cfg.llm.openai_base_url = v === '' ? null : v;
+  const showForce = (cfg.llm.provider || 'google') === 'openai' && v !== '';
+  document.getElementById('llm-openai-force-tool-use-wrapper').classList.toggle('hidden', !showForce);
   saveDebounced();
+});
+document.getElementById('llm-openai-force-tool-use').addEventListener('change', (e) => {
+  if (!cfg) return;
+  cfg.llm.openai_force_tool_use = e.target.checked;
+  saveNow();
 });
 
 // ─── Embedding cache purge ─────────────────────────────────────────────────

@@ -187,6 +187,12 @@ pub struct LlmConfig {
     /// URL — normalization is centralized in `llm::openai::chat_url`.
     #[serde(default)]
     pub openai_base_url: Option<String>,
+    /// When true, send `tool_choice: "required"` even for custom OpenAI base URLs.
+    /// Official OpenAI always gets "required"; custom endpoints default to "auto"
+    /// because some don't support it. Enable this if your custom endpoint supports
+    /// forced tool use (OpenRouter, vLLM, Together, etc.). Defaults to false.
+    #[serde(default)]
+    pub openai_force_tool_use: bool,
 }
 
 impl Default for LlmConfig {
@@ -201,6 +207,7 @@ impl Default for LlmConfig {
             agentic_rag_max_turns: default_agentic_rag_max_turns(),
             agentic_rag_max_chunk_chars: default_agentic_rag_max_chunk_chars(),
             openai_base_url: None,
+            openai_force_tool_use: false,
         }
     }
 }
