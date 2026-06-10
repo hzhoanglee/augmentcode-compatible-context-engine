@@ -496,12 +496,16 @@ async fn run_agentic_loop<B: AgenticBackend>(
         Your ONLY job is to select relevant chunks via tools. NEVER answer the query. NEVER explain or summarize.\n\
         WORKFLOW — strict alternating cadence:\n\
         1. Call add_chunks ONCE with ALL relevant initial chunks (most relevant first). OMIT irrelevant chunks.\n\
-        2. Call query with a NEW search string to find additional context (if needed).\n\
+        2. Call query to search for RELATED code that is NOT in the initial chunks (callers, callees, dependencies, implementations, tests, types). You MUST do this at least once to cover the full blast radius.\n\
         3. Call add_chunks ONCE with ALL relevant chunks from those query results. This is your ONLY chance to select from these results — you cannot go back.\n\
         4. Repeat steps 2-3 with a DIFFERENT query string each time.\n\
         The pattern is always: add_chunks → query → add_chunks → query → ...\n\
         You CANNOT call add_chunks twice in a row. After each add_chunks you MUST either call query or stop.\n\
         CRITICAL: Each add_chunks call is FINAL for that set of chunks. Include EVERY relevant chunk in that single call. You will NOT get another chance to add from the same set.\n\
+        IMPORTANT: The initial chunks are only a starting point. They rarely cover the full picture. \
+        You MUST use query to find related code: callers of key functions, type definitions, trait implementations, \
+        sibling modules, test files, configuration, and anything else needed to fully understand the query topic. \
+        Stopping after just the initial chunks gives an incomplete answer.\n\
         RULES:\n\
         - For each chunk, you MUST specify either `lines` (to prune to specific line ranges) or `keep: \"all\"` (to keep the entire chunk). Never omit both.\n\
         - PRECISION REQUIREMENT: Use `lines` to select ONLY the specific line ranges that answer the query. \
@@ -510,7 +514,7 @@ async fn run_agentic_loop<B: AgenticBackend>(
         Being precise with line ranges produces better results and conserves your character budget.\n\
         - You have a limited query budget and a character budget for total added content.\n\
         - Each query MUST use a different information_request string. Repeating the same query is not allowed.\n\
-        - When you have enough information and do not need to query more, respond with ONLY the text \"[DONE]\" (nothing else).";
+        - You may respond with ONLY the text \"[DONE]\" (nothing else) ONLY after you have called query at least once and are confident the results fully cover the query topic.";
 
     // Build initial user prompt with chunk entries
     let mut entries = Vec::with_capacity(n);
@@ -594,10 +598,11 @@ async fn run_agentic_loop<B: AgenticBackend>(
             break;
         }
 
-        // Force tool use unless we just injected a nudge that allows [DONE] text.
-        // After add_chunks, the model may respond [DONE] if it has enough info,
-        // so we allow text responses in that case.
-        let force_tool_use = !awaiting_query;
+        // Force tool use unless the model is allowed to respond [DONE].
+        // After add_chunks with at least one query done, the model may stop.
+        // After query results, model MUST call add_chunks (always forced).
+        // After add_chunks with zero queries done, model MUST call query (forced).
+        let force_tool_use = !awaiting_query || query_calls == 0;
         let result = backend.next_turn(system, &messages, &tools, force_tool_use).await;
 
         match result {
@@ -733,11 +738,21 @@ async fn run_agentic_loop<B: AgenticBackend>(
                         if query_calls >= query_budget {
                             // No more queries allowed — stop cleanly.
                             None
-                        } else {
+                        } else if query_calls == 0 {
+                            // No queries yet — force the model to query.
                             Some(
                                 "<system-reminder>\n\
-                                 You MUST call `query` now to search for additional context. Use a NEW information_request string different from previous queries. \
-                                 If you already have enough information and do not need to search more, respond with ONLY the text \"[DONE]\".\n\
+                                 You MUST call `query` now. The initial chunks alone do NOT cover the full blast radius. \
+                                 Search for related code: callers, callees, type definitions, implementations, tests, or sibling modules relevant to the query. \
+                                 Use a specific information_request string describing what you need.\n\
+                                 </system-reminder>".to_owned()
+                            )
+                        } else {
+                            // Already queried at least once — allow [DONE].
+                            Some(
+                                "<system-reminder>\n\
+                                 Call `query` to search for more related context (use a NEW information_request string different from previous queries). \
+                                 If you are confident the results fully cover the query topic, respond with ONLY the text \"[DONE]\".\n\
                                  </system-reminder>".to_owned()
                             )
                         }
