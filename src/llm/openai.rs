@@ -22,6 +22,15 @@ struct ChatRequest {
     tool_choice: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt_cache_key: Option<String>,
+    /// Reasoning-effort hint for reasoning-capable OpenAI models. Sent with
+    /// every request; non-reasoning models ignore the field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<Reasoning>,
+}
+
+#[derive(Serialize)]
+struct Reasoning {
+    effort: String,
 }
 
 #[derive(Serialize)]
@@ -194,6 +203,7 @@ pub async fn complete(
         tools: None,
         tool_choice: None,
         prompt_cache_key: None,
+        reasoning: Some(Reasoning { effort: "low".to_owned() }),
     };
 
     info!(
@@ -339,6 +349,7 @@ pub async fn complete_with_tools(
             None
         },
         prompt_cache_key: prompt_cache_key.map(|s| s.to_owned()),
+        reasoning: Some(Reasoning { effort: "low".to_owned() }),
     };
 
     let request_json = serde_json::to_string(&body).unwrap_or_default();
