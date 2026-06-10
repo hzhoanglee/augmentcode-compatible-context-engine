@@ -1260,6 +1260,7 @@ mod tests {
             content: "stored".to_owned(),
             symbol: None,
             symbol_fqn: None,
+            symbol_kind: None,
         }
     }
 
@@ -1937,6 +1938,7 @@ mod tests {
             content: "x".repeat(250_000),
             symbol: None,
             symbol_fqn: None,
+            symbol_kind: None,
         };
         let backend = MockBackend::with_sub_query(
             vec![

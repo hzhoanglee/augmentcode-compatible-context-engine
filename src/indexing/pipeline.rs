@@ -696,15 +696,30 @@ impl IndexPipeline {
         let event_bus_clone = event_bus.cloned();
         let key_hints_owned: Vec<String> = key_hints.to_vec();
 
+        // ── Framework detection (once per run) ───────────────────────────────
+        // Build a file set from the files being indexed to detect active frameworks.
+        let framework_registry = {
+            use crate::indexing::frameworks::{DetectionContext, FrameworkRegistry};
+            let mut registry = FrameworkRegistry::new();
+            let file_set: HashSet<String> = files.iter().cloned().collect();
+            let ctx = DetectionContext {
+                file_set: &file_set,
+                read_file: &|path: &str| std::fs::read_to_string(path).ok(),
+            };
+            registry.detect(&ctx);
+            Arc::new(registry)
+        };
+
         // ── Stage 1: parallel parse (rayon), feed into bounded channel ────
         let (parse_tx, parse_rx) = mpsc::channel::<ParseOutput>(PARSE_CHANNEL_CAP);
         {
             let files_owned: Vec<String> = files.to_vec();
+            let fw_registry = framework_registry.clone();
             tokio::task::spawn_blocking(move || {
                 use rayon::prelude::*;
                 // Par-iterate, but channel send must be blocking.
                 files_owned.par_iter().for_each(|file| {
-                    let output = parse_one_file(file);
+                    let output = parse_one_file_with_frameworks(file, &fw_registry);
                     // Blocking send — applies backpressure when embed is slow.
                     if parse_tx.blocking_send(output).is_err() {
                         // Receiver dropped (pipeline cancelled) — stop.
@@ -1164,8 +1179,10 @@ impl IndexPipeline {
 
     // ─── Phase 2: batched edge resolution ────────────────────────────────
 
-    /// Select the best candidate symbol using 4-level priority:
+    /// Select the best candidate symbol using 5-level priority:
     ///
+    /// Level 0: Full import path resolution via `resolve_import_path`. Uses the
+    ///          file set from candidate symbols to resolve the import to a concrete file.
     /// Level 1: If `import_path` contains `/`, find the candidate whose file path
     ///          `ends_with(import_path)`.
     /// Level 2: If `import_path` is bare (no `/`), find a candidate in the same
@@ -1180,16 +1197,72 @@ impl IndexPipeline {
         from_file: &str,
         import_path: Option<&str>,
     ) -> Option<&'a SymbolWithPos> {
+        use crate::indexing::import_resolver::resolve_import_path;
+        use crate::parsing::{Lang, detect_language};
+        use crate::parsing::generated::is_generated_file;
+
         if candidates.is_empty() {
             return None;
+        }
+
+        // Helper: within a level, prefer non-generated files. Falls back to
+        // generated candidates only if no hand-written match exists at that level.
+        let prefer_non_generated = |iter: &mut dyn Iterator<Item = &'a SymbolWithPos>| -> Option<&'a SymbolWithPos> {
+            let mut generated_fallback: Option<&'a SymbolWithPos> = None;
+            for c in iter {
+                if !is_generated_file(&c.file) {
+                    return Some(c);
+                }
+                if generated_fallback.is_none() {
+                    generated_fallback = Some(c);
+                }
+            }
+            generated_fallback
+        };
+
+        // Level 0: Full import path resolution — highest priority.
+        // Attempt to resolve import_path to a concrete file via language-aware probing,
+        // then match against candidates.
+        if let Some(imp) = import_path {
+            let lang = detect_language(std::path::Path::new(from_file));
+            // Only attempt resolution for languages the resolver supports.
+            if !matches!(lang, Lang::Other | Lang::Java | Lang::C | Lang::Cpp) {
+                let file_set: HashSet<String> = candidates.iter().map(|c| c.file.clone()).collect();
+                if let Some(resolved_file) = resolve_import_path(imp, from_file, lang, &file_set) {
+                    // Find the first candidate in the resolved file.
+                    let result = prefer_non_generated(
+                        &mut candidates.iter().filter(|c| c.file == resolved_file)
+                    );
+                    if result.is_some() {
+                        return result;
+                    }
+                    // Resolution found a file but no candidate symbol in it — try
+                    // re-export/barrel chasing. The target symbol is the name we're
+                    // resolving (all candidates share the same leaf name).
+                    let target_symbol = &candidates[0].name;
+                    if let Some(reexport_file) = crate::indexing::import_resolver::chase_reexports(
+                        &resolved_file, target_symbol, &file_set, 0,
+                    ) {
+                        let result = prefer_non_generated(
+                            &mut candidates.iter().filter(|c| c.file == reexport_file)
+                        );
+                        if result.is_some() {
+                            return result;
+                        }
+                    }
+                }
+            }
         }
 
         // Level 1 / Level 2 — only attempted when import_path is present.
         if let Some(imp) = import_path {
             if imp.contains('/') {
                 // Level 1: path ends_with import_path (handles subdirectory imports).
-                if let Some(found) = candidates.iter().find(|c| c.file.ends_with(imp)) {
-                    return Some(found);
+                let result = prefer_non_generated(
+                    &mut candidates.iter().filter(|c| c.file.ends_with(imp))
+                );
+                if result.is_some() {
+                    return result;
                 }
             } else {
                 // Level 2: bare filename — same parent directory as from_file.
@@ -1197,14 +1270,17 @@ impl IndexPipeline {
                     .parent()
                     .and_then(|p| p.to_str())
                     .unwrap_or("");
-                if let Some(found) = candidates.iter().find(|c| {
-                    std::path::Path::new(&c.file)
-                        .parent()
-                        .and_then(|p| p.to_str())
-                        .map(|d| d == from_dir)
-                        .unwrap_or(false)
-                }) {
-                    return Some(found);
+                let result = prefer_non_generated(
+                    &mut candidates.iter().filter(|c| {
+                        std::path::Path::new(&c.file)
+                            .parent()
+                            .and_then(|p| p.to_str())
+                            .map(|d| d == from_dir)
+                            .unwrap_or(false)
+                    })
+                );
+                if result.is_some() {
+                    return result;
                 }
             }
         }
@@ -1214,8 +1290,8 @@ impl IndexPipeline {
             return Some(found);
         }
 
-        // Level 4: first in sorted order.
-        candidates.first()
+        // Level 4: first in sorted order, preferring non-generated.
+        prefer_non_generated(&mut candidates.iter())
     }
 
     /// Resolve raw edges (stored in `raw_edge` table) into denormalized `calls` rows.
@@ -1862,6 +1938,52 @@ fn resolve_raw_edge_page_from_map(
             ));
         }
     }
+}
+
+// ─── Parse one file with framework edge extraction ──────────────────────────
+
+/// Wrapper that calls `parse_one_file` and then appends framework-produced edges.
+/// The `FrameworkRegistry` must have had `detect()` called before this function.
+fn parse_one_file_with_frameworks(
+    file: &str,
+    registry: &crate::indexing::frameworks::FrameworkRegistry,
+) -> ParseOutput {
+    let mut output = parse_one_file(file);
+
+    // Append framework-detected edges if parse succeeded and registry has active resolvers.
+    if let ParseOutput::Parsed(ref mut parsed) = output
+        && registry.is_detected()
+    {
+        // Read source for framework extraction (we already parsed it, but
+        // parse_one_file doesn't return the source — re-read is cheap for
+        // framework regex extraction which is O(source.len())).
+        if let Ok(source) = std::fs::read_to_string(file) {
+            let fw_edges = registry.extract_edges(file, &source, &parsed.symbols);
+            for edge in fw_edges {
+                if matches!(edge.kind, crate::parsing::relations::EdgeKind::Calls) {
+                    let (to_name, import_path) = match &edge.to {
+                        crate::parsing::relations::EdgeTarget::Unresolved { name, import_path, .. } => {
+                            (name.clone(), import_path.clone())
+                        }
+                        crate::parsing::relations::EdgeTarget::Resolved(qs) => {
+                            (qs.name.clone(), None)
+                        }
+                    };
+                    parsed.raw_edges.push(RawEdgeRecord {
+                        from_file: edge.from.file.clone(),
+                        from_name: edge.from.name.clone(),
+                        from_fqn: edge.from.fqn(),
+                        to_name,
+                        kind: "calls".to_string(),
+                        line: edge.line as i64,
+                        import_path,
+                    });
+                }
+            }
+        }
+    }
+
+    output
 }
 
 // ─── Parse one file (returns ParseOutput — always returns, never drops silently) ─

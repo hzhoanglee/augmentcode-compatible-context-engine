@@ -1,4 +1,5 @@
 pub mod chunker;
+pub mod generated;
 pub mod relations;
 pub mod symbols;
 

@@ -28,6 +28,7 @@ const MAX_TOOL_OUTPUT_CHARS: usize = 48_000;
 const MAX_FIRST_LINE_CHARS: usize = 120;
 
 /// A single result block ready for budget-aware assembly.
+#[derive(Default)]
 struct OutputBlock {
     header: String,
     content: String,
@@ -36,6 +37,9 @@ struct OutputBlock {
     line_end: u32,
     callers: Option<u32>,
     caller_files: Option<u32>,
+    caller_names: Vec<String>,
+    callee_names: Vec<String>,
+    callees: Option<u32>,
 }
 
 /// Assemble result blocks into a single string respecting `MAX_TOOL_OUTPUT_CHARS`.
@@ -207,14 +211,16 @@ fn merge_overlapping_blocks(blocks: Vec<OutputBlock>) -> Vec<OutputBlock> {
                     }
                 }
             }
-            // Rebuild header with updated range + caller tag.
-            let caller_tag = match (block.callers, block.caller_files) {
-                (Some(c), Some(f)) => format!(" [callers:{c} files:{f}]"),
-                _ => String::new(),
-            };
+            // Rebuild header with updated range + enriched caller/callee tags.
+            let caller_tag = format_enriched_caller_tag(
+                block.callers, &block.caller_names, block.caller_files,
+            );
+            let callee_tag = format_enriched_callee_tag(
+                block.callees, &block.callee_names,
+            );
             block.header = format!(
-                "{}#L{}-{}{}",
-                block.file, block.line_start, block.line_end, caller_tag
+                "{}#L{}-{}{}{}",
+                block.file, block.line_start, block.line_end, caller_tag, callee_tag
             );
         }
 
@@ -257,6 +263,15 @@ pub struct CodebaseRetrievalArgs {
     pub information_request: String,
     /// Absolute path to the repository root. Must be a configured and indexed repository.
     pub workspace_full_path: String,
+    /// Optional: filter results to specific symbol kinds (e.g. ["function", "class"]).
+    #[serde(default)]
+    pub filter_kind: Option<Vec<String>>,
+    /// Optional: filter results to specific languages (e.g. ["rust", "typescript"]).
+    #[serde(default)]
+    pub filter_lang: Option<Vec<String>>,
+    /// Optional: filter results to files matching this path substring.
+    #[serde(default)]
+    pub filter_path: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -367,13 +382,20 @@ include the symbol or object. </RULES>"
     ) -> Result<CallToolResult, ErrorData> {
         // Take an owned snapshot of settings — the guard is dropped before the .await below.
         let settings = self.settings.read().await.clone();
+        // Build augmented query with structured filter params as inline prefixes
+        let augmented_query = build_augmented_query(
+            &args.information_request,
+            args.filter_kind.as_deref(),
+            args.filter_lang.as_deref(),
+            args.filter_path.as_deref(),
+        );
         let text = run_codebase_retrieval(
             &self.home_dir,
             &self.data_dir,
             &self.index_engine,
             &self.repo_dbs,
             &settings,
-            &args.information_request,
+            &augmented_query,
             &args.workspace_full_path,
         )
         .await;
@@ -929,6 +951,7 @@ mod tests {
                 line_end: 10,
             callers: None,
             caller_files: None,
+                    ..Default::default()
             },
             OutputBlock {
                 header: "file.rs#L20-30".to_string(),
@@ -938,6 +961,7 @@ mod tests {
                 line_end: 30,
             callers: None,
             caller_files: None,
+                    ..Default::default()
             },
         ];
         let out = assemble_with_budget(&blocks);
@@ -962,6 +986,7 @@ mod tests {
                 line_end: (i + 1) * 500,
             callers: None,
             caller_files: None,
+                    ..Default::default()
             });
         }
         let out = assemble_with_budget(&blocks);
@@ -982,6 +1007,7 @@ mod tests {
                 line_end: 5,
             callers: None,
             caller_files: None,
+                    ..Default::default()
             },
         ];
         // This block fits fully, so test the truncation on a block that exceeds budget.
@@ -995,6 +1021,7 @@ mod tests {
                 line_end: 999,
             callers: None,
             caller_files: None,
+                    ..Default::default()
             },
             OutputBlock {
                 header: "b.rs#L1-10".to_string(),
@@ -1004,6 +1031,7 @@ mod tests {
                 line_end: 10,
             callers: None,
             caller_files: None,
+                    ..Default::default()
             },
         ];
         let out = assemble_with_budget(&blocks2);
@@ -1036,6 +1064,7 @@ mod tests {
                 line_end: 999,
             callers: None,
             caller_files: None,
+                    ..Default::default()
             },
             OutputBlock {
                 header: "file.rs#L5-5".to_string(),
@@ -1045,6 +1074,7 @@ mod tests {
                 line_end: 5,
             callers: None,
             caller_files: None,
+                    ..Default::default()
             },
         ];
         let out = assemble_with_budget(&blocks2);
@@ -1066,6 +1096,7 @@ mod tests {
                 line_end: 10,
             callers: None,
             caller_files: None,
+                    ..Default::default()
             },
             OutputBlock {
                 header: "a.rs#L20-30".into(),
@@ -1075,6 +1106,7 @@ mod tests {
                 line_end: 30,
             callers: None,
             caller_files: None,
+                    ..Default::default()
             },
         ];
         let merged = merge_overlapping_blocks(blocks);
@@ -1094,6 +1126,7 @@ mod tests {
                 line_end: 50,
                 callers: None,
                 caller_files: None,
+                    ..Default::default()
             },
             OutputBlock {
                 header: "a.rs#L26-75".into(),
@@ -1103,6 +1136,7 @@ mod tests {
                 line_end: 75,
                 callers: None,
                 caller_files: None,
+                    ..Default::default()
             },
         ];
         let merged = merge_overlapping_blocks(blocks);
@@ -1124,6 +1158,7 @@ mod tests {
                 line_end: 50,
                 callers: Some(3),
                 caller_files: Some(2),
+                    ..Default::default()
             },
             OutputBlock {
                 header: "a.rs#L26-75 [callers:7 files:4]".into(),
@@ -1133,6 +1168,7 @@ mod tests {
                 line_end: 75,
                 callers: Some(7),
                 caller_files: Some(4),
+                    ..Default::default()
             },
         ];
         let merged = merge_overlapping_blocks(blocks);
@@ -1140,8 +1176,8 @@ mod tests {
         // Caller stats: max(3,7)=7, max(2,4)=4
         assert_eq!(merged[0].callers, Some(7));
         assert_eq!(merged[0].caller_files, Some(4));
-        // Header includes the combined caller tag.
-        assert_eq!(merged[0].header, "a.rs#L1-75 [callers:7 files:4]");
+        // Header includes the combined caller tag (count-only format for merged blocks).
+        assert_eq!(merged[0].header, "a.rs#L1-75 [callers:7]");
     }
 
     #[test]
@@ -1155,6 +1191,7 @@ mod tests {
                 line_end: 10,
             callers: None,
             caller_files: None,
+                    ..Default::default()
             },
             OutputBlock {
                 header: "a.rs#L11-20".into(),
@@ -1164,6 +1201,7 @@ mod tests {
                 line_end: 20,
             callers: None,
             caller_files: None,
+                    ..Default::default()
             },
         ];
         let merged = merge_overlapping_blocks(blocks);
@@ -1183,6 +1221,7 @@ mod tests {
                 line_end: 50,
             callers: None,
             caller_files: None,
+                    ..Default::default()
             },
             OutputBlock {
                 header: "b.rs#L1-50".into(),
@@ -1192,6 +1231,7 @@ mod tests {
                 line_end: 50,
             callers: None,
             caller_files: None,
+                    ..Default::default()
             },
         ];
         let merged = merge_overlapping_blocks(blocks);
@@ -1209,6 +1249,7 @@ mod tests {
                 line_end: 10,
             callers: None,
             caller_files: None,
+                    ..Default::default()
             },
             OutputBlock {
                 header: "a.rs#L1-50".into(),
@@ -1218,6 +1259,7 @@ mod tests {
                 line_end: 50,
             callers: None,
             caller_files: None,
+                    ..Default::default()
             },
             OutputBlock {
                 header: "a.rs#L26-75".into(),
@@ -1227,6 +1269,7 @@ mod tests {
                 line_end: 75,
             callers: None,
             caller_files: None,
+                    ..Default::default()
             },
             OutputBlock {
                 header: "b.rs#L20-30".into(),
@@ -1236,6 +1279,7 @@ mod tests {
                 line_end: 30,
             callers: None,
             caller_files: None,
+                    ..Default::default()
             },
         ];
         let merged = merge_overlapping_blocks(blocks);
@@ -1267,6 +1311,7 @@ mod tests {
                 line_end: 50,
             callers: None,
             caller_files: None,
+                    ..Default::default()
             },
             OutputBlock {
                 header: "/nonexistent/z.rs#L26-75".into(),
@@ -1276,6 +1321,7 @@ mod tests {
                 line_end: 75,
             callers: None,
             caller_files: None,
+                    ..Default::default()
             },
         ];
         let merged = merge_overlapping_blocks(blocks);
@@ -1293,6 +1339,88 @@ mod tests {
         assert_eq!(merged[0].content.matches("2: bbb").count(), 1);
     }
 }
+
+/// Build an augmented query string that prepends structured filter params as inline
+/// filter prefixes (e.g. `kind:function lang:rust path:src/ <original query>`).
+/// The `run_query` filter parser will strip these back out before embedding.
+fn build_augmented_query(
+    information_request: &str,
+    filter_kind: Option<&[String]>,
+    filter_lang: Option<&[String]>,
+    filter_path: Option<&str>,
+) -> String {
+    let mut prefixes = Vec::new();
+    if let Some(kinds) = filter_kind {
+        for k in kinds {
+            prefixes.push(format!("kind:{}", k));
+        }
+    }
+    if let Some(langs) = filter_lang {
+        for l in langs {
+            prefixes.push(format!("lang:{}", l));
+        }
+    }
+    if let Some(path) = filter_path
+        && !path.is_empty()
+    {
+        prefixes.push(format!("path:{}", path));
+    }
+    if prefixes.is_empty() {
+        information_request.to_string()
+    } else {
+        format!("{} {}", prefixes.join(" "), information_request)
+    }
+}
+
+/// Format an enriched caller tag: `[callers: fn_a, fn_b, fn_c +N more]`
+/// When callers > 3, shows first 3 names + count of remaining.
+/// Returns empty string when no callers.
+fn format_enriched_caller_tag(
+    count: Option<u32>,
+    names: &[String],
+    _file_count: Option<u32>,
+) -> String {
+    let c = match count {
+        Some(c) if c > 0 => c,
+        _ => return String::new(),
+    };
+    if names.is_empty() {
+        // Fallback to count-only format if names weren't fetched
+        return format!(" [callers:{c}]");
+    }
+    let max_display = 30;
+    let display_names: Vec<&str> = names.iter().take(max_display).map(|s| s.as_str()).collect();
+    let remaining = c.saturating_sub(display_names.len() as u32);
+    if remaining > 0 {
+        format!(" [callers: {} +{} more]", display_names.join(", "), remaining)
+    } else {
+        format!(" [callers: {}]", display_names.join(", "))
+    }
+}
+
+/// Format an enriched callee tag: `[calls: fn_x, fn_y +N more]`
+/// Returns empty string when no callees.
+fn format_enriched_callee_tag(
+    count: Option<u32>,
+    names: &[String],
+) -> String {
+    let c = match count {
+        Some(c) if c > 0 => c,
+        _ => return String::new(),
+    };
+    if names.is_empty() {
+        return format!(" [calls:{c}]");
+    }
+    let max_display = 30;
+    let display_names: Vec<&str> = names.iter().take(max_display).map(|s| s.as_str()).collect();
+    let remaining = c.saturating_sub(display_names.len() as u32);
+    if remaining > 0 {
+        format!(" [calls: {} +{} more]", display_names.join(", "), remaining)
+    } else {
+        format!(" [calls: {}]", display_names.join(", "))
+    }
+}
+
 /// Returns a string — never panics, never returns Err.
 ///
 /// Note: neither `home_dir` nor `data_dir` is needed here — both DB opens and
@@ -1351,14 +1479,16 @@ async fn do_query(
                 .results
                 .iter()
                 .map(|r| {
-                    let caller_tag = match (r.callers, r.caller_files) {
-                        (Some(c), Some(f)) => format!(" [callers:{c} files:{f}]"),
-                        _ => String::new(),
-                    };
+                    let caller_tag = format_enriched_caller_tag(
+                        r.callers, &r.caller_names, r.caller_files,
+                    );
+                    let callee_tag = format_enriched_callee_tag(
+                        r.callees, &r.callee_names,
+                    );
                     OutputBlock {
                         header: format!(
-                            "{}#L{}-{}{}",
-                            r.file, r.line_start, r.line_end, caller_tag
+                            "{}#L{}-{}{}{}",
+                            r.file, r.line_start, r.line_end, caller_tag, callee_tag
                         ),
                         content: r.content.clone(),
                         file: r.file.clone(),
@@ -1366,10 +1496,20 @@ async fn do_query(
                         line_end: r.line_end,
                         callers: r.callers,
                         caller_files: r.caller_files,
+                        caller_names: r.caller_names.clone(),
+                        callee_names: r.callee_names.clone(),
+                        callees: r.callees,
                     }
                 })
                 .collect();
             let blocks = merge_overlapping_blocks(blocks);
+            // Sort generated-file blocks after hand-written ones, preserving
+            // relative order within each group (stable partition).
+            let (hand_written, generated): (Vec<_>, Vec<_>) = blocks
+                .into_iter()
+                .partition(|b| !crate::parsing::generated::is_generated_file(&b.file));
+            let mut blocks = hand_written;
+            blocks.extend(generated);
             assemble_with_budget(&blocks)
         }
     }
@@ -1481,6 +1621,7 @@ pub async fn run_file_retrieval(
             content: c.content.clone(),
             symbol: None,
             symbol_fqn: None,
+            symbol_kind: None,
         })
         .collect();
 
@@ -1527,6 +1668,7 @@ pub async fn run_file_retrieval(
                         line_end: e,
                         callers: None,
                         caller_files: None,
+                    ..Default::default()
                     });
                 }
             }
@@ -1539,6 +1681,7 @@ pub async fn run_file_retrieval(
                     line_end: chunk.line_end,
                     callers: None,
                     caller_files: None,
+                    ..Default::default()
                 });
             }
             (None, _) => {
@@ -1557,6 +1700,7 @@ pub async fn run_file_retrieval(
                     line_end: chunk.line_end,
                     callers: None,
                     caller_files: None,
+                    ..Default::default()
                 });
             }
         }

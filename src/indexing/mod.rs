@@ -1,4 +1,6 @@
 pub mod events;
+pub mod frameworks;
+pub mod import_resolver;
 pub mod pipeline;
 pub mod tracker;
 pub mod walker;

@@ -18,6 +18,7 @@ pub struct ExpandedChunk {
     pub content: String,
     pub symbol: Option<String>,
     pub symbol_fqn: Option<String>,
+    pub symbol_kind: Option<String>,
 }
 
 // ─── DB row types ──────────────────────────────────────────────────────────
@@ -32,6 +33,8 @@ struct SymbolRow {
     name: String,
     line_start: i64,
     line_end: i64,
+    #[serde(default)]
+    kind: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -178,7 +181,7 @@ async fn query_overlapping_symbols(
 ) -> Result<Vec<SymbolRow>> {
     let rows: Vec<SymbolRow> = db
         .query(
-            "SELECT meta::id(id) AS fqn, file, name, line_start, line_end FROM symbol \
+            "SELECT meta::id(id) AS fqn, file, name, line_start, line_end, kind FROM symbol \
              WHERE file = $file AND line_start <= $chunk_end AND line_end >= $chunk_start",
         )
         .bind(("file", file.to_string()))
@@ -280,7 +283,7 @@ async fn fetch_chunk_for_fqn(
 
     let sym_rows: Vec<SymbolRow> = db
         .query(
-            "SELECT meta::id(id) AS fqn, file, name, line_start, line_end FROM symbol \
+            "SELECT meta::id(id) AS fqn, file, name, line_start, line_end, kind FROM symbol \
              WHERE id = $thing LIMIT 1",
         )
         .bind(("thing", thing))
@@ -321,5 +324,6 @@ async fn fetch_chunk_for_fqn(
         content: row.content,
         symbol: Some(sym.name),
         symbol_fqn: Some(strip_id_brackets(&sym.fqn)),
+        symbol_kind: sym.kind,
     })
 }

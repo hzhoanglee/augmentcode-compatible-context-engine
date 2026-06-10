@@ -12,6 +12,9 @@ pub struct MergeChunk {
     pub symbol: Option<String>,
     /// Full qualified name from the symbol table (e.g. "src/foo.rs::Mod::func").
     pub symbol_fqn: Option<String>,
+    /// Symbol kind (e.g. "function", "class", "struct") — populated from the
+    /// symbol table during fetch_chunk_content. Used for kind: filter application.
+    pub symbol_kind: Option<String>,
 }
 
 /// Dedup + merge adjacent chunks, then cap to `top_k`.
@@ -97,6 +100,9 @@ pub fn merge_chunks(chunks: Vec<MergeChunk>, top_k: usize) -> Vec<MergeChunk> {
                         }
                         if current.symbol_fqn.is_none() && next.symbol_fqn.is_some() {
                             current.symbol_fqn = next.symbol_fqn;
+                        }
+                        if current.symbol_kind.is_none() && next.symbol_kind.is_some() {
+                            current.symbol_kind = next.symbol_kind;
                         }
                     }
                 } else {
