@@ -12,6 +12,7 @@ struct ChatRequest {
     model: String,
     messages: Vec<Message>,
     temperature: f32,
+    stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<ResponseFormat>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -188,6 +189,7 @@ pub async fn complete(
             Message::Standard { role: "user".to_owned(), content: user.to_owned() },
         ],
         temperature,
+        stream: false,
         response_format: structured.then(|| ResponseFormat { kind: "json_object".to_owned() }),
         tools: None,
         tool_choice: None,
@@ -326,11 +328,9 @@ pub async fn complete_with_tools(
         model: model.to_owned(),
         messages,
         temperature,
+        stream: false,
         response_format: None,
         tools: Some(openai_tools),
-        // "required" forces a tool call while no chunk is committed; otherwise
-        // omit (model may finish with a text summary). Non-official endpoints
-        // (custom base_url) often only support "auto"/"none", so downgrade.
         tool_choice: if force_tool_use {
             let is_custom = base_url.is_some_and(|u| !u.trim().is_empty());
             Some(if is_custom { "auto".to_owned() } else { "required".to_owned() })
@@ -386,8 +386,19 @@ pub async fn complete_with_tools(
         bail!("OpenAI API returned HTTP {status}: {text}");
     }
 
-    let parsed: ChatResponse = serde_json::from_str(&text)
-        .context("failed to parse OpenAI response JSON")?;
+    let parsed: ChatResponse = match serde_json::from_str(&text) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(
+                url = %url,
+                model = %model,
+                response_body = %text,
+                parse_error = %e,
+                "openai tool-call: failed to parse response JSON"
+            );
+            bail!("failed to parse OpenAI response JSON: {e}");
+        }
+    };
 
     if let Some(err) = parsed.error {
         bail!("OpenAI API error: {}", err.message);
@@ -489,6 +500,7 @@ mod tests {
             model: "gpt-4o".to_owned(),
             messages: vec![],
             temperature: 0.0,
+            stream: false,
             response_format: None,
             tools: None,
             tool_choice: None,
@@ -504,6 +516,7 @@ mod tests {
             model: "gpt-4o".to_owned(),
             messages: vec![],
             temperature: 0.0,
+            stream: false,
             response_format: None,
             tools: None,
             tool_choice: None,

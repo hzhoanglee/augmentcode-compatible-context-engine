@@ -509,7 +509,8 @@ async fn run_agentic_loop<B: AgenticBackend>(
         For most chunks, only a subset of lines matter — use `lines: [[start, end], ...]` with the absolute line numbers shown in the chunk to pick exactly those ranges. \
         Being precise with line ranges produces better results and conserves your character budget.\n\
         - You have a limited query budget and a character budget for total added content.\n\
-        - Each query MUST use a different information_request string. Repeating the same query is not allowed.";
+        - Each query MUST use a different information_request string. Repeating the same query is not allowed.\n\
+        - When you have enough information and do not need to query more, respond with ONLY the text \"[DONE]\" (nothing else).";
 
     // Build initial user prompt with chunk entries
     let mut entries = Vec::with_capacity(n);
@@ -531,13 +532,11 @@ async fn run_agentic_loop<B: AgenticBackend>(
 
     let chunks_text = entries.join("\n---\n");
     let user_prompt = format!(
-        "<system-reminder>\n\
-         Strict cadence: add_chunks → query → add_chunks → query → ...\n\
-         You CANNOT call add_chunks twice in a row. After add_chunks, you MUST call query or stop.\n\
-         Each add_chunks is your ONLY chance to select from the current chunk set. Include ALL relevant chunks — you cannot go back.\n\
-         Each query MUST use a DIFFERENT information_request. Repeating the same string is forbidden.\n\
-         </system-reminder>\n\n\
-         Query: {query}\n\nChunks:\n{chunks_text}"
+        "Query: {query}\n\nChunks:\n{chunks_text}\n\n\
+         <system-reminder>\n\
+         You MUST call `add_chunks` now to select ALL relevant chunks from the list above (most relevant first). \
+         Do NOT respond with text. Use the add_chunks tool.\n\
+         </system-reminder>"
     );
 
     let tools = agentic_tool_definitions();
@@ -707,12 +706,7 @@ async fn run_agentic_loop<B: AgenticBackend>(
                             }
                             // When query budget is now exhausted, append a nudge
                             // so the model calls add_chunks next instead of stopping.
-                            let content = if query_calls >= query_budget && !result_content.starts_with("Error:") {
-                                format!("{result_content}\n\n--- Query budget exhausted. \
-                                    You MUST call add_chunks now with any relevant chunks from these results.")
-                            } else {
-                                result_content
-                            };
+                            let content = result_content;
                             tool_results.push(ToolResult {
                                 name: "query".to_owned(),
                                 id: call.id.clone(),
@@ -731,6 +725,39 @@ async fn run_agentic_loop<B: AgenticBackend>(
                 }
 
                 messages.push(ChatMessage::ToolResults(tool_results));
+
+                // Inject a user message telling the model which tool to call next.
+                // After add_chunks → nudge toward query (or stop if budget spent).
+                // After query → nudge toward add_chunks.
+                if stop_mid_turn.is_none() {
+                    let nudge = if awaiting_query {
+                        if query_calls >= query_budget {
+                            // No more queries allowed — stop cleanly.
+                            None
+                        } else {
+                            Some(
+                                "<system-reminder>\n\
+                                 You MUST call `query` now to search for additional context. Use a NEW information_request string different from previous queries. \
+                                 If you already have enough information and do not need to search more, respond with ONLY the text \"[DONE]\".\n\
+                                 </system-reminder>".to_owned()
+                            )
+                        }
+                    } else {
+                        Some(
+                            "<system-reminder>\n\
+                             You MUST call `add_chunks` now to select ALL relevant chunks from the results above. \
+                             Do NOT respond with text. Use the add_chunks tool.\n\
+                             </system-reminder>".to_owned()
+                        )
+                    };
+                    match nudge {
+                        Some(msg) => messages.push(ChatMessage::User(msg)),
+                        None => {
+                            exit = LoopExit::QueryBudget;
+                            break;
+                        }
+                    }
+                }
 
                 // Post-response budget decision: only the char-budget hard cap
                 // stops here. Query budget is enforced earlier (mid-turn after
@@ -905,8 +932,7 @@ fn handle_add_chunks(
     let total_chars = accumulated_chars.saturating_add(added_chars);
     let remaining = if char_budget > 0 { char_budget.saturating_sub(total_chars) } else { 0 };
     lines_out.push(format!(
-        "--- {}/{} chunks selected, {total_chars}/{char_budget} chars used, {remaining} remaining. \
-         Selection for this set is FINAL. Call query with a NEW search string for more context, or stop.",
+        "--- {}/{} chunks selected, {total_chars}/{char_budget} chars used, {remaining} remaining.",
         accumulated.len(), chunks.len()
     ));
     (lines_out.join("\n"), added_chars)
