@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -79,8 +79,9 @@ impl VoyageClient {
     /// OpenAI-compatible /v1/embeddings endpoint; anything else is Voyage.
     pub fn from_config(config: &EmbeddingConfig) -> Result<Self> {
         let openai = config.provider == "openai";
-        let endpoint = if openai {
-            let base = config
+        let endpoint =
+            if openai {
+                let base = config
                 .base_url
                 .as_deref()
                 .map(str::trim)
@@ -88,10 +89,10 @@ impl VoyageClient {
                 .ok_or_else(|| anyhow::anyhow!(
                     "embedding provider 'openai' requires base_url (e.g. http://host:1234/v1)"
                 ))?;
-            embeddings_url(base)
-        } else {
-            VOYAGE_ENDPOINT.to_string()
-        };
+                embeddings_url(base)
+            } else {
+                VOYAGE_ENDPOINT.to_string()
+            };
         // OpenAI-compatible local servers may run without auth — substitute one
         // empty key, which suppresses the Authorization header per request.
         let keys = if openai && config.api_keys.is_empty() {
@@ -110,7 +111,13 @@ impl VoyageClient {
 
     /// Back-compat constructor: official Voyage endpoint.
     pub fn new(model: String, api_keys: Vec<String>) -> Result<Self> {
-        Self::with_endpoint(model, api_keys, VOYAGE_ENDPOINT.to_string(), true, MAX_BATCH_SIZE)
+        Self::with_endpoint(
+            model,
+            api_keys,
+            VOYAGE_ENDPOINT.to_string(),
+            true,
+            MAX_BATCH_SIZE,
+        )
     }
 
     /// Client for the embedding-similarity reranker (LM Studio / any
@@ -123,7 +130,9 @@ impl VoyageClient {
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("rerank requires base_url (e.g. http://host:1234/v1)"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("rerank requires base_url (e.g. http://host:1234/v1)")
+            })?;
         let keys = if config.api_keys.is_empty() {
             vec![String::new()]
         } else {
@@ -185,14 +194,20 @@ impl VoyageClient {
         for offset in 0..n_keys {
             let key_idx = (start_cursor + offset) % n_keys;
             let key = &self.inner.api_keys[key_idx];
-            match self.try_embed_query_with_key(key, &texts, InputType::Query).await {
+            match self
+                .try_embed_query_with_key(key, &texts, InputType::Query)
+                .await
+            {
                 Ok(mut embeddings) => {
                     return embeddings
                         .pop()
                         .ok_or_else(|| anyhow::anyhow!("embedding API returned empty embeddings"));
                 }
                 Err(EmbedError::RateLimited) => {
-                    warn!(key_index = key_idx, "embedding API 429 on query embed — trying next key");
+                    warn!(
+                        key_index = key_idx,
+                        "embedding API 429 on query embed — trying next key"
+                    );
                 }
                 Err(EmbedError::Other(e)) => return Err(e),
             }
@@ -205,7 +220,10 @@ impl VoyageClient {
         for offset in 0..n_keys {
             let key_idx = (start_cursor + offset) % n_keys;
             let key = &self.inner.api_keys[key_idx];
-            match self.try_embed_query_with_key(key, &texts, InputType::Query).await {
+            match self
+                .try_embed_query_with_key(key, &texts, InputType::Query)
+                .await
+            {
                 Ok(mut embeddings) => {
                     return embeddings
                         .pop()
@@ -233,7 +251,11 @@ impl VoyageClient {
     /// Embed one provider-request batch, splitting internally if `texts`
     /// exceeds the configured batch size. Public so the pipeline can drive
     /// batching manually and report per-batch progress between awaits.
-    pub async fn embed_batch(&self, texts: &[String], input_type: InputType) -> Result<Vec<Vec<f32>>> {
+    pub async fn embed_batch(
+        &self,
+        texts: &[String],
+        input_type: InputType,
+    ) -> Result<Vec<Vec<f32>>> {
         if texts.len() > self.inner.batch_size {
             // Callers may chunk by the old 128 constant — re-split to the
             // provider's real cap rather than 400ing.
@@ -246,7 +268,11 @@ impl VoyageClient {
         self.embed_one_request(texts, input_type).await
     }
 
-    async fn embed_one_request(&self, texts: &[String], input_type: InputType) -> Result<Vec<Vec<f32>>> {
+    async fn embed_one_request(
+        &self,
+        texts: &[String],
+        input_type: InputType,
+    ) -> Result<Vec<Vec<f32>>> {
         let n_keys = self.inner.api_keys.len();
         let start_cursor = self.inner.key_cursor.fetch_add(1, Ordering::Relaxed) % n_keys;
 
@@ -297,7 +323,8 @@ impl VoyageClient {
         texts: &[String],
         input_type: InputType,
     ) -> std::result::Result<Vec<Vec<f32>>, EmbedError> {
-        self.try_embed_with_key_using(&self.inner.http, key, texts, input_type).await
+        self.try_embed_with_key_using(&self.inner.http, key, texts, input_type)
+            .await
     }
 
     async fn try_embed_query_with_key(
@@ -306,7 +333,8 @@ impl VoyageClient {
         texts: &[String],
         input_type: InputType,
     ) -> std::result::Result<Vec<Vec<f32>>, EmbedError> {
-        self.try_embed_with_key_using(&self.inner.query_http, key, texts, input_type).await
+        self.try_embed_with_key_using(&self.inner.query_http, key, texts, input_type)
+            .await
     }
 
     async fn try_embed_with_key_using(
@@ -328,10 +356,7 @@ impl VoyageClient {
         if !key.is_empty() {
             req = req.bearer_auth(key);
         }
-        let response = req
-            .send()
-            .await
-            .map_err(|e| EmbedError::Other(e.into()))?;
+        let response = req.send().await.map_err(|e| EmbedError::Other(e.into()))?;
 
         let status = response.status();
 

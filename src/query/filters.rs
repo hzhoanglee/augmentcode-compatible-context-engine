@@ -125,9 +125,9 @@ pub fn bounded_edit_distance(a: &str, b: &str, max_dist: u32) -> u32 {
 
         for i in 1..=s_len {
             let cost = if short[i - 1] == long[j - 1] { 0 } else { 1 };
-            curr_row[i] = (prev_row[i] + 1)           // deletion
-                .min(curr_row[i - 1] + 1)              // insertion
-                .min(prev_row[i - 1] + cost);          // substitution
+            curr_row[i] = (prev_row[i] + 1) // deletion
+                .min(curr_row[i - 1] + 1) // insertion
+                .min(prev_row[i - 1] + cost); // substitution
             row_min = row_min.min(curr_row[i]);
         }
 
@@ -308,8 +308,15 @@ mod tests {
 
     #[test]
     fn merge_filters() {
-        let mut f1 = QueryFilters { kinds: vec!["function".into()], ..Default::default() };
-        let f2 = QueryFilters { kinds: vec!["class".into()], languages: vec!["rust".into()], ..Default::default() };
+        let mut f1 = QueryFilters {
+            kinds: vec!["function".into()],
+            ..Default::default()
+        };
+        let f2 = QueryFilters {
+            kinds: vec!["class".into()],
+            languages: vec!["rust".into()],
+            ..Default::default()
+        };
         f1.merge(f2);
         assert_eq!(f1.kinds, vec!["function", "class"]);
         assert_eq!(f1.languages, vec!["rust"]);

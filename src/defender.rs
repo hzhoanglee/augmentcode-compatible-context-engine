@@ -71,7 +71,10 @@ pub fn add_exclusions(_data_dir: &str) -> DefenderExcludeResult {
 #[cfg(windows)]
 pub fn check_status(data_dir: &str) -> DefenderStatus {
     let process_name = "context-engine.exe";
-    let normalized_dir = data_dir.replace('/', "\\").trim_end_matches('\\').to_string();
+    let normalized_dir = data_dir
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_string();
 
     // The marker is authoritative once written: it means an elevated process
     // already verified the exclusions exist. A non-admin server cannot re-read
@@ -136,10 +139,14 @@ try {{
             let line = stdout.trim();
             if let Some(rest) = line.strip_prefix("OK|") {
                 let parts: Vec<&str> = rest.split('|').collect();
-                let data_dir_excluded =
-                    parts.first().map(|s| s.eq_ignore_ascii_case("true")).unwrap_or(false);
-                let process_excluded =
-                    parts.get(1).map(|s| s.eq_ignore_ascii_case("true")).unwrap_or(false);
+                let data_dir_excluded = parts
+                    .first()
+                    .map(|s| s.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false);
+                let process_excluded = parts
+                    .get(1)
+                    .map(|s| s.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false);
                 DefenderStatus {
                     platform: "windows",
                     applicable: true,
@@ -189,7 +196,10 @@ pub fn add_exclusions(data_dir: &str) -> DefenderExcludeResult {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
 
     let process_name = "context-engine.exe";
-    let normalized_dir = data_dir.replace('/', "\\").trim_end_matches('\\').to_string();
+    let normalized_dir = data_dir
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_string();
 
     // Inner script runs ELEVATED, so it can both add and *read back* the
     // exclusions to verify. It exits 0 only when both exclusions are confirmed

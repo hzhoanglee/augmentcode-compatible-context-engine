@@ -210,12 +210,10 @@ async fn main() {
     .await;
     info!("IndexEngine started ({} repos)", repo_count);
 
-    let addr: std::net::SocketAddr = format!("{bind}:{port}")
-        .parse()
-        .unwrap_or_else(|e| {
-            eprintln!("error: invalid bind address '{bind}:{port}': {e}");
-            std::process::exit(2);
-        });
+    let addr: std::net::SocketAddr = format!("{bind}:{port}").parse().unwrap_or_else(|e| {
+        eprintln!("error: invalid bind address '{bind}:{port}': {e}");
+        std::process::exit(2);
+    });
 
     let app = server::build_router(
         home_dir,

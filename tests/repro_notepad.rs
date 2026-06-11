@@ -14,12 +14,14 @@ use tempfile::TempDir;
 #[tokio::test]
 async fn schema_ddl_flips_stale_symbol_so_native_insert_persists() {
     use context_engine_rs::store::schema::SCHEMA_DDL;
+    use std::collections::BTreeMap;
     use surrealdb::engine::local::RocksDb;
     use surrealdb::sql::{Array as SqlArray, Object as SqlObject, Value as SqlValue};
-    use std::collections::BTreeMap;
 
     let dir = TempDir::new().unwrap();
-    let db = surrealdb::Surreal::new::<RocksDb>(dir.path().to_str().unwrap()).await.unwrap();
+    let db = surrealdb::Surreal::new::<RocksDb>(dir.path().to_str().unwrap())
+        .await
+        .unwrap();
     db.use_ns("t").use_db("t").await.unwrap();
 
     // Oldest stale prod schema: parent declared as a record link + a sentinel row,
@@ -27,16 +29,29 @@ async fn schema_ddl_flips_stale_symbol_so_native_insert_persists() {
     db.query(
         "DEFINE TABLE symbol SCHEMAFULL;\
          DEFINE FIELD name   ON symbol TYPE string;\
-         DEFINE FIELD parent ON symbol TYPE option<record<symbol>>;"
-    ).await.unwrap().check().unwrap();
+         DEFINE FIELD parent ON symbol TYPE option<record<symbol>>;",
+    )
+    .await
+    .unwrap()
+    .check()
+    .unwrap();
     db.query("CREATE symbol:keep SET name = 'sentinel', parent = NONE")
-        .await.unwrap().check().unwrap();
+        .await
+        .unwrap()
+        .check()
+        .unwrap();
 
     // Apply the real production DDL (idempotent flip happens here).
-    db.query(SCHEMA_DDL).await.unwrap().check()
+    db.query(SCHEMA_DDL)
+        .await
+        .unwrap()
+        .check()
         .expect("SCHEMA_DDL must apply cleanly over a stale SCHEMAFULL symbol table");
     // Re-apply to prove idempotency (open_db runs it on every open).
-    db.query(SCHEMA_DDL).await.unwrap().check()
+    db.query(SCHEMA_DDL)
+        .await
+        .unwrap()
+        .check()
         .expect("SCHEMA_DDL must be idempotent");
 
     // Native insert writing parent as a plain string — the exact pipeline path.
@@ -47,19 +62,27 @@ async fn schema_ddl_flips_stale_symbol_so_native_insert_persists() {
     let data = SqlArray::from(vec![SqlValue::Object(SqlObject::from(m))]);
     db.query("INSERT INTO symbol $data ON DUPLICATE KEY UPDATE name = $input.name RETURN NONE")
         .bind(("data", data))
-        .await.unwrap().check()
+        .await
+        .unwrap()
+        .check()
         .expect("native symbol INSERT must not be rejected by a stale parent field type");
 
     #[derive(serde::Deserialize)]
-    struct C { count: i64 }
-    let rows: Vec<C> = db.query("SELECT count() AS count FROM symbol GROUP ALL")
-        .await.unwrap().take(0).unwrap();
+    struct C {
+        count: i64,
+    }
+    let rows: Vec<C> = db
+        .query("SELECT count() AS count FROM symbol GROUP ALL")
+        .await
+        .unwrap()
+        .take(0)
+        .unwrap();
     assert_eq!(
-        rows.first().map(|r| r.count).unwrap_or(0), 2,
+        rows.first().map(|r| r.count).unwrap_or(0),
+        2,
         "sentinel row must survive the flip AND the new symbol must persist"
     );
 }
-
 
 /// Regression guard for the silent-empty-symbol bug.
 ///
@@ -74,12 +97,14 @@ async fn schema_ddl_flips_stale_symbol_so_native_insert_persists() {
 /// error, exactly as the symbol flush path relies on.
 #[tokio::test]
 async fn insert_with_duplicate_id_merges_instead_of_failing() {
+    use std::collections::BTreeMap;
     use surrealdb::engine::local::RocksDb;
     use surrealdb::sql::{Array as SqlArray, Object as SqlObject, Value as SqlValue};
-    use std::collections::BTreeMap;
 
     let dir = TempDir::new().unwrap();
-    let db = surrealdb::Surreal::new::<RocksDb>(dir.path().to_str().unwrap()).await.unwrap();
+    let db = surrealdb::Surreal::new::<RocksDb>(dir.path().to_str().unwrap())
+        .await
+        .unwrap();
     db.use_ns("t").use_db("t").await.unwrap();
     db.query("DEFINE TABLE symbol SCHEMALESS").await.unwrap();
 
@@ -100,22 +125,34 @@ async fn insert_with_duplicate_id_merges_instead_of_failing() {
         .expect("INSERT with ON DUPLICATE KEY UPDATE must not error on duplicate id");
 
     #[derive(serde::Deserialize)]
-    struct C { count: i64 }
+    struct C {
+        count: i64,
+    }
     let rows: Vec<C> = db
         .query("SELECT count() AS count FROM symbol GROUP ALL")
-        .await.unwrap().take(0).unwrap();
+        .await
+        .unwrap()
+        .take(0)
+        .unwrap();
     assert_eq!(
-        rows.first().map(|r| r.count).unwrap_or(0), 2,
+        rows.first().map(|r| r.count).unwrap_or(0),
+        2,
         "both distinct ids (A, B) must persist — duplicate A merges, not rolls back the batch"
     );
 
     #[derive(serde::Deserialize)]
-    struct N { name: String }
+    struct N {
+        name: String,
+    }
     let a: Vec<N> = db
         .query("SELECT name FROM symbol:A")
-        .await.unwrap().take(0).unwrap();
+        .await
+        .unwrap()
+        .take(0)
+        .unwrap();
     assert_eq!(
-        a.first().map(|r| r.name.as_str()), Some("second"),
+        a.first().map(|r| r.name.as_str()),
+        Some("second"),
         "duplicate id must update to the last-written value (matches original UPSERT)"
     );
 }
@@ -137,7 +174,9 @@ async fn count_real_db_rows() {
     let db = open_db(&data_dir, &repo).await.expect("open real db");
 
     #[derive(serde::Deserialize)]
-    struct C { count: i64 }
+    struct C {
+        count: i64,
+    }
     async fn count(db: &surrealdb::Surreal<surrealdb::engine::local::Db>, table: &str) -> i64 {
         let q = format!("SELECT count() AS count FROM {table} GROUP ALL");
         let rows: Vec<C> = db.query(q).await.unwrap().take(0).unwrap();
@@ -148,12 +187,16 @@ async fn count_real_db_rows() {
     let chunks = count(&db, "chunk").await;
     let calls = count(&db, "calls").await;
     let raw_edges = count(&db, "raw_edge").await;
-    eprintln!(
-        "REAL DB ROWS: symbol={symbols} chunk={chunks} calls={calls} raw_edge={raw_edges}"
+    eprintln!("REAL DB ROWS: symbol={symbols} chunk={chunks} calls={calls} raw_edge={raw_edges}");
+    assert!(
+        symbols > 0,
+        "symbol table must not be empty (silent-empty-symbol regression)"
     );
-    assert!(symbols > 0, "symbol table must not be empty (silent-empty-symbol regression)");
     assert!(chunks > 0, "chunk table must not be empty");
-    assert!(calls > 0, "calls graph must not be empty — graph-expansion retrieval depends on it");
+    assert!(
+        calls > 0,
+        "calls graph must not be empty — graph-expansion retrieval depends on it"
+    );
 }
 
 #[tokio::test]
@@ -179,14 +222,21 @@ async fn repro_full_rebuild_notepad_ade_fresh_db() {
     let pipeline = IndexPipeline::new(repo.clone(), None);
 
     let start = Instant::now();
-    let res = pipeline.run(&db, None, true, None, None, None, &[], None).await;
+    let res = pipeline
+        .run(&db, None, true, None, None, None, &[], None)
+        .await;
     let wall = start.elapsed();
 
     match res {
         Ok(s) => {
             #[derive(serde::Deserialize)]
-            struct C { count: i64 }
-            async fn count(db: &surrealdb::Surreal<surrealdb::engine::local::Db>, table: &str) -> i64 {
+            struct C {
+                count: i64,
+            }
+            async fn count(
+                db: &surrealdb::Surreal<surrealdb::engine::local::Db>,
+                table: &str,
+            ) -> i64 {
                 let q = format!("SELECT count() AS count FROM {table} GROUP ALL");
                 let rows: Vec<C> = db.query(q).await.unwrap().take(0).unwrap();
                 rows.first().map(|r| r.count).unwrap_or(0)
@@ -199,13 +249,21 @@ async fn repro_full_rebuild_notepad_ade_fresh_db() {
                 s.indexed_files,
                 s.total_files,
                 wall.as_secs_f64(),
-                symbols, chunks, calls,
+                symbols,
+                chunks,
+                calls,
             );
             // Accuracy guards: the silent-empty-symbol bug left symbol=0 and calls=0
             // while chunk stayed populated. Assert the call graph is actually built.
-            assert!(symbols > 0, "symbol table must not be empty (silent-empty-symbol regression)");
+            assert!(
+                symbols > 0,
+                "symbol table must not be empty (silent-empty-symbol regression)"
+            );
             assert!(chunks > 0, "chunk table must not be empty");
-            assert!(calls > 0, "calls graph must not be empty — graph-expansion retrieval depends on it");
+            assert!(
+                calls > 0,
+                "calls graph must not be empty — graph-expansion retrieval depends on it"
+            );
         }
         Err(e) => panic!("REPRO FAILED at: {e:#}"),
     }
@@ -251,7 +309,10 @@ async fn inspect_real_calls_indexes() {
         .join("surreal")
         .join("D__projects_Cpp_notepad_ade");
     if !surreal_dir.exists() {
-        eprintln!("SKIP: real surreal DB not found at {}", surreal_dir.display());
+        eprintln!(
+            "SKIP: real surreal DB not found at {}",
+            surreal_dir.display()
+        );
         return;
     }
 
@@ -269,7 +330,10 @@ async fn inspect_real_calls_indexes() {
         .flatten();
     let before = before.unwrap_or(serde_json::Value::Null);
     eprintln!("=== BEFORE: INFO FOR TABLE calls ===");
-    eprintln!("{}", serde_json::to_string_pretty(&before).unwrap_or_else(|_| format!("{before:?}")));
+    eprintln!(
+        "{}",
+        serde_json::to_string_pretty(&before).unwrap_or_else(|_| format!("{before:?}"))
+    );
 
     // Extract index names from the before state.
     // SurrealDB returns { "indexes": { "idx_calls_in_file": "DEFINE INDEX ...", ... } }
@@ -297,7 +361,9 @@ async fn inspect_real_calls_indexes() {
             Some(def) => {
                 let def_str = def.to_string();
                 if def_str.contains("CONCURRENTLY") || def_str.contains("building") {
-                    eprintln!("REPAIR NEEDED: index '{name}' appears incomplete/building: {def_str}");
+                    eprintln!(
+                        "REPAIR NEEDED: index '{name}' appears incomplete/building: {def_str}"
+                    );
                     needs_repair = true;
                 } else {
                     eprintln!("OK: index '{name}' present: {def_str}");
@@ -307,20 +373,26 @@ async fn inspect_real_calls_indexes() {
     }
 
     if needs_repair {
-        eprintln!("Repairing calls indexes synchronously (REMOVE + DEFINE without CONCURRENTLY)...");
+        eprintln!(
+            "Repairing calls indexes synchronously (REMOVE + DEFINE without CONCURRENTLY)..."
+        );
         db.query(
             "REMOVE INDEX IF EXISTS idx_calls_in_file  ON calls; \
              REMOVE INDEX IF EXISTS idx_calls_out_file ON calls; \
              REMOVE INDEX IF EXISTS idx_calls_in_name  ON calls; \
-             REMOVE INDEX IF EXISTS idx_calls_out_name ON calls;"
-        ).await.expect("remove calls indexes for repair");
+             REMOVE INDEX IF EXISTS idx_calls_out_name ON calls;",
+        )
+        .await
+        .expect("remove calls indexes for repair");
 
         db.query(
             "DEFINE INDEX IF NOT EXISTS idx_calls_in_file  ON calls FIELDS in_file; \
              DEFINE INDEX IF NOT EXISTS idx_calls_out_file ON calls FIELDS out_file; \
              DEFINE INDEX IF NOT EXISTS idx_calls_in_name  ON calls FIELDS in_name; \
-             DEFINE INDEX IF NOT EXISTS idx_calls_out_name ON calls FIELDS out_name;"
-        ).await.expect("rebuild calls indexes synchronously");
+             DEFINE INDEX IF NOT EXISTS idx_calls_out_name ON calls FIELDS out_name;",
+        )
+        .await
+        .expect("rebuild calls indexes synchronously");
 
         eprintln!("Repair complete.");
     } else {
@@ -337,7 +409,10 @@ async fn inspect_real_calls_indexes() {
         .flatten();
     let after = after.unwrap_or(serde_json::Value::Null);
     eprintln!("=== AFTER: INFO FOR TABLE calls ===");
-    eprintln!("{}", serde_json::to_string_pretty(&after).unwrap_or_else(|_| format!("{after:?}")));
+    eprintln!(
+        "{}",
+        serde_json::to_string_pretty(&after).unwrap_or_else(|_| format!("{after:?}"))
+    );
 
     // Verify all 4 indexes are present and not CONCURRENTLY after repair.
     let after_indexes = after
@@ -428,7 +503,9 @@ async fn repro_full_rebuild_notepad_ade_warm_cache() {
     let pipeline = IndexPipeline::new_with_concurrency(repo.clone(), None, 4, Some(cache));
 
     let start = Instant::now();
-    let res = pipeline.run(&db, None, true, None, None, None, &[], None).await;
+    let res = pipeline
+        .run(&db, None, true, None, None, None, &[], None)
+        .await;
     let wall = start.elapsed();
 
     match res {
@@ -453,4 +530,3 @@ async fn repro_full_rebuild_notepad_ade_warm_cache() {
         Err(e) => panic!("REPRO WARM-CACHE FAILED: {e:#}"),
     }
 }
-

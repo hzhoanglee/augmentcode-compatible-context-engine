@@ -4,8 +4,8 @@
 //! Edge extraction: `router.get/post/put/delete/use(path, handler)` patterns → edge
 //! from route registration to handler function.
 
-use std::sync::LazyLock;
 use regex::Regex;
+use std::sync::LazyLock;
 
 use crate::indexing::frameworks::{DetectionContext, FrameworkResolver};
 use crate::parsing::relations::{EdgeKind, EdgeTarget, RawEdge};
@@ -24,9 +24,7 @@ static ROUTE_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// Also match direct handler references without path:
 /// `app.use(authMiddleware)`, `router.use(cors())`
 static USE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?:app|router|server)\s*\.\s*use\s*\(\s*([a-zA-Z_]\w*)\s*[,)]"
-    ).unwrap()
+    Regex::new(r"(?:app|router|server)\s*\.\s*use\s*\(\s*([a-zA-Z_]\w*)\s*[,)]").unwrap()
 });
 
 impl FrameworkResolver for ExpressResolver {
@@ -144,10 +142,13 @@ router.post('/users', createUser);
 app.use(authMiddleware);
 "#;
         let edges = ExpressResolver.extract_edges("routes/users.js", source, &[]);
-        let names: Vec<&str> = edges.iter().map(|e| match &e.to {
-            EdgeTarget::Unresolved { name, .. } => name.as_str(),
-            _ => "",
-        }).collect();
+        let names: Vec<&str> = edges
+            .iter()
+            .map(|e| match &e.to {
+                EdgeTarget::Unresolved { name, .. } => name.as_str(),
+                _ => "",
+            })
+            .collect();
         assert!(names.contains(&"getUsers"));
         assert!(names.contains(&"createUser"));
         assert!(names.contains(&"authMiddleware"));

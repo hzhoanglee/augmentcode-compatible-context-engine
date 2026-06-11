@@ -203,9 +203,7 @@ impl VectorIndex {
             b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
         });
         scored.truncate(k);
-        scored.sort_unstable_by(|a, b| {
-            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        scored.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         scored
             .into_iter()
@@ -359,12 +357,10 @@ mod tests {
     fn remove_repo_windows_paths_no_collision() {
         let mut index = VectorIndex::new();
 
-        let foo_chunks: Vec<(ChunkId, Vec<f32>)> = vec![
-            (chunk(r"D:\proj\foo\x.rs", 1, 10), emb(4, 1.0)),
-        ];
-        let foobar_chunks: Vec<(ChunkId, Vec<f32>)> = vec![
-            (chunk(r"D:\proj\foobar\y.rs", 1, 10), emb(4, 2.0)),
-        ];
+        let foo_chunks: Vec<(ChunkId, Vec<f32>)> =
+            vec![(chunk(r"D:\proj\foo\x.rs", 1, 10), emb(4, 1.0))];
+        let foobar_chunks: Vec<(ChunkId, Vec<f32>)> =
+            vec![(chunk(r"D:\proj\foobar\y.rs", 1, 10), emb(4, 2.0))];
 
         index.insert(&foo_chunks);
         index.insert(&foobar_chunks);
@@ -469,7 +465,7 @@ mod tests {
         let pairs: Vec<(ChunkId, Vec<f32>)> = (0..10_usize)
             .map(|i| {
                 let v: Vec<f32> = (0..dim).map(|j| i as f32 * 0.1 + j as f32 * 0.01).collect();
-                (chunk(&format!("/f{i}.rs", ), 1, 10), v)
+                (chunk(&format!("/f{i}.rs",), 1, 10), v)
             })
             .collect();
 

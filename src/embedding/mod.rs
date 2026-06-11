@@ -1,5 +1,5 @@
-pub mod voyage;
 pub mod cache;
+pub mod voyage;
 
 /// Input type hint for the embedding API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

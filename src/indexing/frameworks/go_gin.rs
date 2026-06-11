@@ -4,8 +4,8 @@
 //! Edge extraction: `.GET`/`.POST`/`.PUT`/`.DELETE`/`.Use` method calls → edge
 //! to the handler function.
 
-use std::sync::LazyLock;
 use regex::Regex;
+use std::sync::LazyLock;
 
 use crate::indexing::frameworks::{DetectionContext, FrameworkResolver};
 use crate::parsing::relations::{EdgeKind, EdgeTarget, RawEdge};
@@ -99,7 +99,9 @@ mod tests {
         file_set.insert("go.mod".to_string());
         let ctx = DetectionContext {
             file_set: &file_set,
-            read_file: &|_| Some("module myapp\n\nrequire github.com/gin-gonic/gin v1.9.0\n".to_string()),
+            read_file: &|_| {
+                Some("module myapp\n\nrequire github.com/gin-gonic/gin v1.9.0\n".to_string())
+            },
         };
         assert!(GoGinResolver.detect(&ctx));
     }
@@ -110,7 +112,9 @@ mod tests {
         file_set.insert("go.mod".to_string());
         let ctx = DetectionContext {
             file_set: &file_set,
-            read_file: &|_| Some("module myapp\n\nrequire github.com/gorilla/mux v1.8.0\n".to_string()),
+            read_file: &|_| {
+                Some("module myapp\n\nrequire github.com/gorilla/mux v1.8.0\n".to_string())
+            },
         };
         assert!(!GoGinResolver.detect(&ctx));
     }
@@ -128,10 +132,13 @@ func SetupRoutes(r *gin.Engine) {
 }
 "#;
         let edges = GoGinResolver.extract_edges("routes.go", source, &[]);
-        let names: Vec<&str> = edges.iter().map(|e| match &e.to {
-            EdgeTarget::Unresolved { name, .. } => name.as_str(),
-            _ => "",
-        }).collect();
+        let names: Vec<&str> = edges
+            .iter()
+            .map(|e| match &e.to {
+                EdgeTarget::Unresolved { name, .. } => name.as_str(),
+                _ => "",
+            })
+            .collect();
         assert!(names.contains(&"GetUsers"));
         assert!(names.contains(&"CreateUser"));
         assert!(names.contains(&"AuthMiddleware"));
@@ -156,14 +163,18 @@ func SetupRoutes(r *gin.Engine) {
         let edges = GoGinResolver.extract_edges("routes.go", source, &[]);
         assert_eq!(edges.len(), 2);
         match &edges[0].to {
-            EdgeTarget::Unresolved { name, import_path, .. } => {
+            EdgeTarget::Unresolved {
+                name, import_path, ..
+            } => {
                 assert_eq!(name, "ListUsers");
                 assert_eq!(import_path.as_deref(), Some("handlers"));
             }
             _ => panic!("expected Unresolved"),
         }
         match &edges[1].to {
-            EdgeTarget::Unresolved { name, import_path, .. } => {
+            EdgeTarget::Unresolved {
+                name, import_path, ..
+            } => {
                 assert_eq!(name, "CreateUser");
                 assert_eq!(import_path.as_deref(), Some("handlers"));
             }

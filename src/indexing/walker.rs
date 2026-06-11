@@ -7,21 +7,101 @@ use tracing::debug;
 
 /// Extensions considered indexable code/config.
 pub const CODE_EXTENSIONS: &[&str] = &[
-    "py", "js", "ts", "tsx", "jsx", "rs", "go", "java", "cs", "cpp", "c", "h", "hpp", "cc", "cxx", "hxx", "hh",
-    "rb", "php", "swift", "kt", "kts", "scala", "ex", "exs", "clj", "hs", "ml", "lua", "luau", "r",
-    "sh", "bash", "zsh", "fish", "ps1", "yaml", "yml", "toml", "json", "xml", "html",
-    "css", "scss", "sass", "less", "sql", "proto", "graphql", "md", "txt", "dockerfile", "tf", "hcl",
-    "vue", "svelte", "astro", "mdx", "prisma",
-    "dart", "zig", "nim", "sol", "elm", "jl", "erl", "hrl", "nix",
-    "m", "mm", "groovy", "gradle", "pl", "pm", "rst",
-    "wgsl", "glsl", "hlsl",
-    "pas", "pp", "dpr", "lpr", "dpk", "liquid",
+    "py",
+    "js",
+    "ts",
+    "tsx",
+    "jsx",
+    "rs",
+    "go",
+    "java",
+    "cs",
+    "cpp",
+    "c",
+    "h",
+    "hpp",
+    "cc",
+    "cxx",
+    "hxx",
+    "hh",
+    "rb",
+    "php",
+    "swift",
+    "kt",
+    "kts",
+    "scala",
+    "ex",
+    "exs",
+    "clj",
+    "hs",
+    "ml",
+    "lua",
+    "luau",
+    "r",
+    "sh",
+    "bash",
+    "zsh",
+    "fish",
+    "ps1",
+    "yaml",
+    "yml",
+    "toml",
+    "json",
+    "xml",
+    "html",
+    "css",
+    "scss",
+    "sass",
+    "less",
+    "sql",
+    "proto",
+    "graphql",
+    "md",
+    "txt",
+    "dockerfile",
+    "tf",
+    "hcl",
+    "vue",
+    "svelte",
+    "astro",
+    "mdx",
+    "prisma",
+    "dart",
+    "zig",
+    "nim",
+    "sol",
+    "elm",
+    "jl",
+    "erl",
+    "hrl",
+    "nix",
+    "m",
+    "mm",
+    "groovy",
+    "gradle",
+    "pl",
+    "pm",
+    "rst",
+    "wgsl",
+    "glsl",
+    "hlsl",
+    "pas",
+    "pp",
+    "dpr",
+    "lpr",
+    "dpk",
+    "liquid",
 ];
 
 /// Non-dot directories to always skip (dot-prefixed directories are pruned by the
 /// walk filter automatically, so they do not need to appear here).
 pub const SKIP_DIRS: &[&str] = &[
-    "node_modules", "target", "build", "dist", "__pycache__", "vendor",
+    "node_modules",
+    "target",
+    "build",
+    "dist",
+    "__pycache__",
+    "vendor",
 ];
 
 /// Returns true if `path` is inside a dot-prefixed directory relative to `repo_root`.
@@ -107,6 +187,38 @@ pub fn is_under_skip_dir(repo_root: &Path, path: &Path) -> bool {
     false
 }
 
+/// Compile the user's `index_ignore_filenames` entries into a gitignore-style
+/// matcher rooted at `repo_root`. Plain entries like `CLAUDE.md` keep their
+/// "match a file of this name in any directory" meaning (identical to the old
+/// exact-name behavior), while glob patterns are now honored too:
+/// `*.min.js`, `**/*.generated.ts`, `dist/`, etc. Returns `None` when the list
+/// is empty so callers can skip matching entirely on the hot path.
+pub(crate) fn build_name_ignore(
+    repo_root: &Path,
+    patterns: &HashSet<String>,
+) -> Option<ignore::gitignore::Gitignore> {
+    if patterns.is_empty() {
+        return None;
+    }
+    let mut builder = GitignoreBuilder::new(repo_root);
+    for p in patterns {
+        let line = p.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Err(e) = builder.add_line(None, line) {
+            debug!(pattern = %line, error = %e, "skipping invalid ignore pattern");
+        }
+    }
+    match builder.build() {
+        Ok(gi) => Some(gi),
+        Err(e) => {
+            debug!(error = %e, "failed to build ignore-name matcher; name ignores disabled");
+            None
+        }
+    }
+}
+
 /// Reusable filter that applies the full `walk_repo` rule set to many paths
 /// while building the gitignore matcher exactly once.
 ///
@@ -126,7 +238,9 @@ pub struct ChangeFilter {
     repo_root: std::path::PathBuf,
     gitignore: ignore::gitignore::Gitignore,
     extra_extensions: Vec<String>,
-    ignore_filenames: HashSet<String>,
+    /// Compiled matcher for the user's `index_ignore_filenames` patterns.
+    /// `None` when the list is empty (skips matching on the hot path).
+    ignore_names: Option<ignore::gitignore::Gitignore>,
     /// Per-repo ignored relative paths (forward-slash-normalized).
     ignore_paths: HashSet<String>,
 }
@@ -143,11 +257,25 @@ impl ChangeFilter {
         Self::new_full(repo_root, extra_extensions, HashSet::new())
     }
 
-    pub fn new_full(repo_root: &Path, extra_extensions: Vec<String>, ignore_filenames: HashSet<String>) -> Self {
-        Self::new_complete(repo_root, extra_extensions, ignore_filenames, HashSet::new())
+    pub fn new_full(
+        repo_root: &Path,
+        extra_extensions: Vec<String>,
+        ignore_filenames: HashSet<String>,
+    ) -> Self {
+        Self::new_complete(
+            repo_root,
+            extra_extensions,
+            ignore_filenames,
+            HashSet::new(),
+        )
     }
 
-    pub fn new_complete(repo_root: &Path, extra_extensions: Vec<String>, ignore_filenames: HashSet<String>, ignore_paths: HashSet<String>) -> Self {
+    pub fn new_complete(
+        repo_root: &Path,
+        extra_extensions: Vec<String>,
+        ignore_filenames: HashSet<String>,
+        ignore_paths: HashSet<String>,
+    ) -> Self {
         let mut builder = GitignoreBuilder::new(repo_root);
         let _ = builder.add(repo_root.join(".gitignore"));
         let _ = builder.add(repo_root.join(".ignore"));
@@ -155,11 +283,12 @@ impl ChangeFilter {
             debug!(error = %e, "failed to build gitignore matcher; nothing will be gitignore-excluded");
             ignore::gitignore::Gitignore::empty()
         });
+        let ignore_names = build_name_ignore(repo_root, &ignore_filenames);
         Self {
             repo_root: repo_root.to_path_buf(),
             gitignore,
             extra_extensions,
-            ignore_filenames,
+            ignore_names,
             ignore_paths,
         }
     }
@@ -174,9 +303,12 @@ impl ChangeFilter {
         {
             return false;
         }
-        if !self.ignore_filenames.is_empty()
-            && let Some(fname) = path.file_name().and_then(|n| n.to_str())
-            && self.ignore_filenames.contains(fname)
+        let is_dir = path.is_dir();
+        if let Some(gi) = &self.ignore_names
+            && matches!(
+                gi.matched_path_or_any_parents(path, is_dir),
+                Match::Ignore(_)
+            )
         {
             return false;
         }
@@ -187,7 +319,6 @@ impl ChangeFilter {
         {
             return false;
         }
-        let is_dir = path.is_dir();
         !matches!(
             self.gitignore.matched_path_or_any_parents(path, is_dir),
             Match::Ignore(_)
@@ -201,13 +332,21 @@ pub fn walk_repo(repo_path: &str) -> Vec<String> {
     walk_repo_with(repo_path, &[], &HashSet::new(), &HashSet::new())
 }
 
-pub fn walk_repo_with(repo_path: &str, extra_extensions: &[String], ignore_filenames: &HashSet<String>, ignore_paths: &HashSet<String>) -> Vec<String> {
+pub fn walk_repo_with(
+    repo_path: &str,
+    extra_extensions: &[String],
+    ignore_filenames: &HashSet<String>,
+    ignore_paths: &HashSet<String>,
+) -> Vec<String> {
     let root = Path::new(repo_path);
     if !root.exists() {
         return vec![];
     }
 
     let mut files = Vec::new();
+
+    // Compile the user ignore patterns once (glob-aware), reused for every entry.
+    let name_ignore = build_name_ignore(root, ignore_filenames);
 
     let walker = WalkBuilder::new(root)
         .hidden(false) // include dot-files that aren't gitignored
@@ -244,9 +383,8 @@ pub fn walk_repo_with(repo_path: &str, extra_extensions: &[String], ignore_filen
                 }
                 let path = entry.path();
                 if has_indexable_extension_with(path, extra_extensions) {
-                    if !ignore_filenames.is_empty()
-                        && let Some(fname) = path.file_name().and_then(|n| n.to_str())
-                        && ignore_filenames.contains(fname)
+                    if let Some(gi) = &name_ignore
+                        && gi.matched_path_or_any_parents(path, false).is_ignore()
                     {
                         continue;
                     }
@@ -310,7 +448,11 @@ mod tests {
 
         // Root-level dot-file must be indexed.
         let has_eslintrc = result.iter().any(|p| p.ends_with(".eslintrc.json"));
-        assert!(has_eslintrc, ".eslintrc.json must be indexed (root-level dot-file); got: {:?}", result);
+        assert!(
+            has_eslintrc,
+            ".eslintrc.json must be indexed (root-level dot-file); got: {:?}",
+            result
+        );
 
         // Nothing under .claude, .agent, or .github must appear.
         for p in &result {
@@ -344,7 +486,11 @@ mod tests {
         assert!(has_main, "src/main.js must be indexed; got: {:?}", result);
 
         let has_node_modules = result.iter().any(|p| p.contains("node_modules"));
-        assert!(!has_node_modules, "node_modules content must not be indexed; got: {:?}", result);
+        assert!(
+            !has_node_modules,
+            "node_modules content must not be indexed; got: {:?}",
+            result
+        );
     }
 
     #[test]
@@ -548,24 +694,91 @@ mod tests {
         touch(root, "src/lib.rs");
 
         let repo_str = root.to_str().unwrap();
-        let ignore: HashSet<String> = ["CLAUDE.md", "AGENTS.md"].iter().map(|s| s.to_string()).collect();
-        let result: Vec<String> = walk_repo_with(repo_str, &[], &ignore, &HashSet::new()).into_iter().map(|p| fwd(&p)).collect();
+        let ignore: HashSet<String> = ["CLAUDE.md", "AGENTS.md"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let result: Vec<String> = walk_repo_with(repo_str, &[], &ignore, &HashSet::new())
+            .into_iter()
+            .map(|p| fwd(&p))
+            .collect();
 
         assert!(
             result.iter().any(|p| p.ends_with("src/main.rs")),
-            "src/main.rs must be indexed; got: {:?}", result
+            "src/main.rs must be indexed; got: {:?}",
+            result
         );
         assert!(
             result.iter().any(|p| p.ends_with("src/lib.rs")),
-            "src/lib.rs must be indexed; got: {:?}", result
+            "src/lib.rs must be indexed; got: {:?}",
+            result
         );
         assert!(
             !result.iter().any(|p| p.ends_with("CLAUDE.md")),
-            "CLAUDE.md must be skipped; got: {:?}", result
+            "CLAUDE.md must be skipped; got: {:?}",
+            result
         );
         assert!(
             !result.iter().any(|p| p.ends_with("AGENTS.md")),
-            "AGENTS.md must be skipped; got: {:?}", result
+            "AGENTS.md must be skipped; got: {:?}",
+            result
+        );
+    }
+
+    /// Glob patterns in the ignore list are honored: `*.min.js` drops minified
+    /// JS anywhere in the tree, a path glob (`dist/**`) prunes a subtree, while
+    /// a bare name (`CLAUDE.md`) keeps its match-anywhere behavior and normal
+    /// sources are untouched.
+    #[test]
+    fn walk_repo_ignore_supports_globs() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        touch(root, "src/main.rs");
+        touch(root, "src/app.js");
+        touch(root, "src/app.min.js");
+        touch(root, "vendor_lib/jquery.min.js");
+        touch(root, "generated/bundle.ts");
+        touch(root, "docs/CLAUDE.md");
+
+        let repo_str = root.to_str().unwrap();
+        let ignore: HashSet<String> = ["*.min.js", "generated/**", "CLAUDE.md"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let result: Vec<String> = walk_repo_with(repo_str, &[], &ignore, &HashSet::new())
+            .into_iter()
+            .map(|p| fwd(&p))
+            .collect();
+
+        // Kept: normal sources.
+        assert!(
+            result.iter().any(|p| p.ends_with("src/main.rs")),
+            "src/main.rs must be indexed; got: {:?}",
+            result
+        );
+        assert!(
+            result.iter().any(|p| p.ends_with("src/app.js")),
+            "src/app.js must be indexed; got: {:?}",
+            result
+        );
+        // Dropped: *.min.js glob (in any directory).
+        assert!(
+            !result.iter().any(|p| p.ends_with(".min.js")),
+            "*.min.js must be skipped everywhere; got: {:?}",
+            result
+        );
+        // Dropped: path glob prunes the generated/ subtree.
+        assert!(
+            !result.iter().any(|p| p.contains("generated/")),
+            "generated/** must be skipped; got: {:?}",
+            result
+        );
+        // Dropped: bare name still matches in any directory.
+        assert!(
+            !result.iter().any(|p| p.ends_with("CLAUDE.md")),
+            "CLAUDE.md must be skipped; got: {:?}",
+            result
         );
     }
 
@@ -599,21 +812,27 @@ mod tests {
         touch(root, "doc/README.md");
 
         let repo_str = root.to_str().unwrap();
-        let ignore_paths: HashSet<String> = ["doc/Building.md"].iter().map(|s| s.to_string()).collect();
+        let ignore_paths: HashSet<String> =
+            ["doc/Building.md"].iter().map(|s| s.to_string()).collect();
         let result: Vec<String> = walk_repo_with(repo_str, &[], &HashSet::new(), &ignore_paths)
-            .into_iter().map(|p| fwd(&p)).collect();
+            .into_iter()
+            .map(|p| fwd(&p))
+            .collect();
 
         assert!(
             result.iter().any(|p| p.ends_with("src/main.rs")),
-            "src/main.rs must be indexed; got: {:?}", result
+            "src/main.rs must be indexed; got: {:?}",
+            result
         );
         assert!(
             result.iter().any(|p| p.ends_with("doc/README.md")),
-            "doc/README.md must be indexed; got: {:?}", result
+            "doc/README.md must be indexed; got: {:?}",
+            result
         );
         assert!(
             !result.iter().any(|p| p.ends_with("doc/Building.md")),
-            "doc/Building.md must be skipped by ignore_paths; got: {:?}", result
+            "doc/Building.md must be skipped by ignore_paths; got: {:?}",
+            result
         );
     }
 
@@ -626,10 +845,10 @@ mod tests {
 
         // Build filter with forward-slash root (as config may store it).
         let root_fwd = root.to_str().unwrap().replace('\\', "/");
-        let ignore_paths: HashSet<String> = ["doc/Building.md"].iter().map(|s| s.to_string()).collect();
-        let filter = ChangeFilter::new_complete(
-            Path::new(&root_fwd), vec![], HashSet::new(), ignore_paths,
-        );
+        let ignore_paths: HashSet<String> =
+            ["doc/Building.md"].iter().map(|s| s.to_string()).collect();
+        let filter =
+            ChangeFilter::new_complete(Path::new(&root_fwd), vec![], HashSet::new(), ignore_paths);
 
         // Candidate as native (PathBuf::join → backslash on Windows).
         let building_native = root.join("doc").join("Building.md");

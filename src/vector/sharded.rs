@@ -129,7 +129,9 @@ impl ShardedVectorIndex {
     /// serializing concurrent searches.
     fn touch(&self, repo: &str) {
         if let Some(shard) = self.shards.get(repo) {
-            shard.last_touched.store(self.next_stamp(), Ordering::Relaxed);
+            shard
+                .last_touched
+                .store(self.next_stamp(), Ordering::Relaxed);
         }
     }
 
@@ -147,7 +149,8 @@ impl ShardedVectorIndex {
             return;
         }
         let stamp = self.next_stamp();
-        self.shards.insert(repo.to_string(), Shard::new(shard, stamp));
+        self.shards
+            .insert(repo.to_string(), Shard::new(shard, stamp));
         self.evict_to_cap(repo, active);
     }
 
@@ -389,7 +392,10 @@ mod tests {
             "merged and sharded must return the same number of results"
         );
         for (m, s) in merged_results.iter().zip(sharded_out.results.iter()) {
-            assert_eq!(m.chunk_id.file, s.chunk_id.file, "ranking order must match merged index");
+            assert_eq!(
+                m.chunk_id.file, s.chunk_id.file,
+                "ranking order must match merged index"
+            );
             assert_eq!(m.chunk_id.line_start, s.chunk_id.line_start);
             assert!(
                 (m.score - s.score).abs() < 1e-6,
@@ -421,9 +427,21 @@ mod tests {
         // Install a, b, c — each 10 vectors. After c, resident would be 3 shards
         // (> cap) → must evict one. "/r/a" is active so it is protected; the LRU
         // victim must be "/r/b" (oldest non-active).
-        idx.install_shard("/r/a", shard_from_gids("/r/a", &(0..10).collect::<Vec<_>>()), &active);
-        idx.install_shard("/r/b", shard_from_gids("/r/b", &(10..20).collect::<Vec<_>>()), &active);
-        idx.install_shard("/r/c", shard_from_gids("/r/c", &(20..30).collect::<Vec<_>>()), &active);
+        idx.install_shard(
+            "/r/a",
+            shard_from_gids("/r/a", &(0..10).collect::<Vec<_>>()),
+            &active,
+        );
+        idx.install_shard(
+            "/r/b",
+            shard_from_gids("/r/b", &(10..20).collect::<Vec<_>>()),
+            &active,
+        );
+        idx.install_shard(
+            "/r/c",
+            shard_from_gids("/r/c", &(20..30).collect::<Vec<_>>()),
+            &active,
+        );
 
         assert!(
             idx.resident_bytes() <= cap,
@@ -431,10 +449,23 @@ mod tests {
             idx.resident_bytes(),
             cap
         );
-        assert!(idx.is_resident("/r/a"), "active repo /r/a must never be evicted");
-        assert!(idx.is_resident("/r/c"), "most-recently-installed /r/c must stay resident");
-        assert!(!idx.is_resident("/r/b"), "LRU non-active /r/b must be evicted to honor the cap");
-        assert_eq!(idx.resident_repo_count(), 2, "exactly two shards fit under the cap");
+        assert!(
+            idx.is_resident("/r/a"),
+            "active repo /r/a must never be evicted"
+        );
+        assert!(
+            idx.is_resident("/r/c"),
+            "most-recently-installed /r/c must stay resident"
+        );
+        assert!(
+            !idx.is_resident("/r/b"),
+            "LRU non-active /r/b must be evicted to honor the cap"
+        );
+        assert_eq!(
+            idx.resident_repo_count(),
+            2,
+            "exactly two shards fit under the cap"
+        );
     }
 
     /// CONTRACT TEST 3 — a cold repo yields PARTIAL results and is flagged for warm.
@@ -459,20 +490,34 @@ mod tests {
         let out = idx.search(&query, 10, None, &scope);
 
         // Partial: results only from the hot shard.
-        assert!(!out.results.is_empty(), "resident shard must contribute results");
         assert!(
-            out.results.iter().all(|r| r.chunk_id.file.starts_with("/r/hot")),
+            !out.results.is_empty(),
+            "resident shard must contribute results"
+        );
+        assert!(
+            out.results
+                .iter()
+                .all(|r| r.chunk_id.file.starts_with("/r/hot")),
             "results must come only from the resident shard"
         );
         // Cold repo flagged for background warm — not silently dropped, not blocking.
-        assert_eq!(out.cold_repos, vec!["/r/cold".to_string()], "cold repo must be flagged for warm");
+        assert_eq!(
+            out.cold_repos,
+            vec!["/r/cold".to_string()],
+            "cold repo must be flagged for warm"
+        );
 
         // Simulate the background warm completing.
         idx.install_shard("/r/cold", shard_from_gids("/r/cold", &[3, 4]), &scope);
         let out2 = idx.search(&query, 10, None, &scope);
-        assert!(out2.cold_repos.is_empty(), "after warm, no repo should be cold");
         assert!(
-            out2.results.iter().any(|r| r.chunk_id.file.starts_with("/r/cold")),
+            out2.cold_repos.is_empty(),
+            "after warm, no repo should be cold"
+        );
+        assert!(
+            out2.results
+                .iter()
+                .any(|r| r.chunk_id.file.starts_with("/r/cold")),
             "warmed repo must now contribute results"
         );
     }
@@ -489,7 +534,10 @@ mod tests {
 
         // Filter to the cold repo — must return empty and flag it.
         let out = idx.search(&query, 10, Some("/r/cold"), &["/r/cold".to_string()]);
-        assert!(out.results.is_empty(), "filtered search to cold repo yields no results");
+        assert!(
+            out.results.is_empty(),
+            "filtered search to cold repo yields no results"
+        );
         assert_eq!(out.cold_repos, vec!["/r/cold".to_string()]);
     }
 
@@ -508,8 +556,16 @@ mod tests {
         let cap = bytes_for(per_shard * 2, dim);
         let mut idx = ShardedVectorIndex::new(cap);
 
-        idx.install_shard("/r/a", shard_from_gids("/r/a", &(0..10).collect::<Vec<_>>()), &[]);
-        idx.install_shard("/r/b", shard_from_gids("/r/b", &(10..20).collect::<Vec<_>>()), &[]);
+        idx.install_shard(
+            "/r/a",
+            shard_from_gids("/r/a", &(0..10).collect::<Vec<_>>()),
+            &[],
+        );
+        idx.install_shard(
+            "/r/b",
+            shard_from_gids("/r/b", &(10..20).collect::<Vec<_>>()),
+            &[],
+        );
 
         // Search `a` through a SHARED reference (&self) — bumps a to MRU via the
         // atomic stamp. If this compiles with `&idx` (not `&mut`), the hot path is
@@ -520,10 +576,17 @@ mod tests {
         let _ = shared.search(&query, 5, Some("/r/a"), &["/r/a".to_string()]);
 
         // Now install c → overflow. Victim must be b (LRU after a's touch).
-        idx.install_shard("/r/c", shard_from_gids("/r/c", &(20..30).collect::<Vec<_>>()), &[]);
+        idx.install_shard(
+            "/r/c",
+            shard_from_gids("/r/c", &(20..30).collect::<Vec<_>>()),
+            &[],
+        );
 
         assert!(idx.resident_bytes() <= cap, "must honor cap");
-        assert!(idx.is_resident("/r/a"), "a was just searched → MRU → must survive");
+        assert!(
+            idx.is_resident("/r/a"),
+            "a was just searched → MRU → must survive"
+        );
         assert!(idx.is_resident("/r/c"), "c just installed → must survive");
         assert!(
             !idx.is_resident("/r/b"),
@@ -531,6 +594,3 @@ mod tests {
         );
     }
 }
-
-
-

@@ -260,9 +260,7 @@ impl IndexEngine {
 
         // Derive the resident-byte cap from settings (MB → bytes). 0 disables the
         // cap (unbounded — not recommended; kept as an escape hatch).
-        let cap_bytes = settings
-            .vector_resident_cap_mb
-            .saturating_mul(1024 * 1024);
+        let cap_bytes = settings.vector_resident_cap_mb.saturating_mul(1024 * 1024);
 
         // Start with an empty sharded index so the server can bind immediately.
         // Shards are warmed in a background task below (bounded by the cap), and
@@ -292,7 +290,10 @@ impl IndexEngine {
         {
             let mut statuses = engine.statuses.write().await;
             for repo in &settings.repos {
-                statuses.insert(crate::store::normalize_repo_path(repo), RepoStatus::default());
+                statuses.insert(
+                    crate::store::normalize_repo_path(repo),
+                    RepoStatus::default(),
+                );
             }
         }
 
@@ -444,7 +445,10 @@ impl IndexEngine {
         // clear_cancel_token, making the token still present but the run done.
         let is_indexing = {
             let statuses = self.statuses.read().await;
-            statuses.get(&repo).map(|s| s.state == IndexState::Indexing).unwrap_or(false)
+            statuses
+                .get(&repo)
+                .map(|s| s.state == IndexState::Indexing)
+                .unwrap_or(false)
         };
         if !is_indexing {
             return false;
@@ -534,7 +538,10 @@ impl IndexEngine {
             }
         };
 
-        let ShardedSearch { results, cold_repos } = {
+        let ShardedSearch {
+            results,
+            cold_repos,
+        } = {
             // READ lock — concurrent searches run in parallel. `search` bumps
             // per-shard atomic recency stamps under this shared guard.
             let index = self.vector_index.read().await;
@@ -609,71 +616,71 @@ async fn run_consumer(
     mut rx: tokio::sync::mpsc::Receiver<IndexTrigger>,
     settings_handle: Arc<RwLock<Settings>>,
 ) {
+    // Bound how many repos index at once. Sized once from the boot snapshot:
+    // the semaphore is fixed-capacity, so a runtime change to index_concurrency
+    // takes effect on the next launch (like data_dir / embeddings_dir). Min 1.
+    let concurrency = settings_handle.read().await.index_concurrency.max(1);
+    let sem = Arc::new(tokio::sync::Semaphore::new(concurrency));
+
     while let Some(trigger) = rx.recv().await {
-        // Take a fresh owned snapshot at the top of each iteration so post-boot
-        // changes to API keys and other config are reflected immediately.
-        // The guard is dropped as soon as `.clone()` completes — it is NOT held
-        // across any of the subsequent .await calls below.
+        // Take a fresh owned snapshot per trigger so post-boot changes to API
+        // keys and other config are reflected immediately. The guard is dropped
+        // as soon as `.clone()` completes — never held across an .await.
         let settings_ref = settings_handle.read().await.clone();
-
-        let repo = trigger.repo.clone();
-        let force_rebuild = trigger.rebuild;
         let engine_ref = engine.clone();
-        let run_start = Instant::now();
 
-        // Acquire per-repo serialisation lock.
-        let lock = engine_ref.get_repo_lock(&repo).await;
-        let _guard = lock.lock().await;
+        // Acquire a permit BEFORE dispatching: when all index slots are busy the
+        // consumer stops pulling, so triggers back-pressure into the channel and
+        // concurrent pipeline runs (and their memory/CPU) stay bounded.
+        let permit = Arc::clone(&sem)
+            .acquire_owned()
+            .await
+            .expect("index semaphore closed");
 
-        // Create a fresh cancellation token for this run.
-        let cancel_token = engine_ref.new_cancel_token(&repo).await;
+        // Spawn so distinct repos index in parallel; the per-repo lock inside
+        // run_one still serialises runs for the SAME repo.
+        tokio::spawn(async move {
+            let _permit = permit; // released when this run finishes
+            run_one(engine_ref, trigger, settings_ref).await;
+        });
+    }
+}
 
-        // Mark indexing. Reset progress counters so the UI shows the
-        // indeterminate pulse (total_files == 0) until the pipeline reports a total.
-        {
-            let mut statuses = engine_ref.statuses.write().await;
-            let status = statuses.entry(repo.clone()).or_default();
-            status.state = IndexState::Indexing;
-            status.error = None;
-            status.indexed_files = 0;
-            status.total_files = 0;
-        }
+/// Index a single repo end-to-end: acquire the per-repo lock, run the pipeline,
+/// then finalise status. Runs inside a spawned, semaphore-bounded task so that
+/// distinct repos index concurrently while same-repo runs serialise on the lock.
+async fn run_one(engine_ref: Arc<IndexEngine>, trigger: IndexTrigger, settings_ref: Settings) {
+    let repo = trigger.repo.clone();
+    let force_rebuild = trigger.rebuild;
+    let run_start = Instant::now();
 
-        // Build embedding client — skip if the backend isn't configured.
-        let voyage_client = if !settings_ref.embedding.is_configured() {
-            info!(repo = %repo, "embedding backend not configured, skipping embed");
-            None
-        } else {
-            match VoyageClient::from_config(&settings_ref.embedding) {
-                Ok(c) => Some(c),
-                Err(e) => {
-                    error!(repo = %repo, error = %e, "failed to create voyage client");
-                    let mut statuses = engine_ref.statuses.write().await;
-                    let s = statuses.entry(repo.clone()).or_default();
-                    s.state = IndexState::Error;
-                    s.error = Some(e.to_string());
-                    engine_ref.event_bus.emit(IndexEvent::Failed {
-                        repo: repo.clone(),
-                        error: e.to_string(),
-                    });
-                    engine_ref.clear_cancel_token(&repo).await;
-                    continue;
-                }
-            }
-        };
+    // Acquire per-repo serialisation lock.
+    let lock = engine_ref.get_repo_lock(&repo).await;
+    let _guard = lock.lock().await;
 
-        // Build a progress handle that lets the pipeline write live counts.
-        let progress = ProgressHandle {
-            statuses: Arc::clone(&engine_ref.statuses),
-            repo: repo.clone(),
-        };
+    // Create a fresh cancellation token for this run.
+    let cancel_token = engine_ref.new_cancel_token(&repo).await;
 
-        // Acquire the SHARED repo DB handle — the same instance the server reads
-        // through, so the explorer/query layer sees these writes immediately.
-        let db = match store::get_or_open(&engine_ref.repo_dbs, &engine_ref.data_dir, &repo).await {
-            Ok(db) => db,
+    // Mark indexing. Reset progress counters so the UI shows the
+    // indeterminate pulse (total_files == 0) until the pipeline reports a total.
+    {
+        let mut statuses = engine_ref.statuses.write().await;
+        let status = statuses.entry(repo.clone()).or_default();
+        status.state = IndexState::Indexing;
+        status.error = None;
+        status.indexed_files = 0;
+        status.total_files = 0;
+    }
+
+    // Build embedding client — skip if the backend isn't configured.
+    let voyage_client = if !settings_ref.embedding.is_configured() {
+        info!(repo = %repo, "embedding backend not configured, skipping embed");
+        None
+    } else {
+        match VoyageClient::from_config(&settings_ref.embedding) {
+            Ok(c) => Some(c),
             Err(e) => {
-                error!(repo = %repo, error = %e, "failed to open repo DB");
+                error!(repo = %repo, error = %e, "failed to create voyage client");
                 let mut statuses = engine_ref.statuses.write().await;
                 let s = statuses.entry(repo.clone()).or_default();
                 s.state = IndexState::Error;
@@ -683,127 +690,159 @@ async fn run_consumer(
                     error: e.to_string(),
                 });
                 engine_ref.clear_cancel_token(&repo).await;
-                continue;
+                return;
             }
-        };
+        }
+    };
 
-        // Read per-repo ignored paths from index_meta (fresh each run).
-        let per_repo_ignored_paths = store::ops::get_ignored_paths(&db)
-            .await
-            .unwrap_or_default();
+    // Build a progress handle that lets the pipeline write live counts.
+    let progress = ProgressHandle {
+        statuses: Arc::clone(&engine_ref.statuses),
+        repo: repo.clone(),
+    };
 
-        // Mask API keys for event display.
-        let key_hints: Vec<String> = settings_ref
-            .embedding
-            .api_keys
-            .iter()
-            .map(|k| {
-                if k.len() > 8 {
-                    format!("{}...{}", &k[..4], &k[k.len() - 4..])
-                } else {
-                    "****".to_string()
-                }
-            })
-            .collect();
+    // Acquire the SHARED repo DB handle — the same instance the server reads
+    // through, so the explorer/query layer sees these writes immediately.
+    let db = match store::get_or_open(&engine_ref.repo_dbs, &engine_ref.data_dir, &repo).await {
+        Ok(db) => db,
+        Err(e) => {
+            error!(repo = %repo, error = %e, "failed to open repo DB");
+            let mut statuses = engine_ref.statuses.write().await;
+            let s = statuses.entry(repo.clone()).or_default();
+            s.state = IndexState::Error;
+            s.error = Some(e.to_string());
+            engine_ref.event_bus.emit(IndexEvent::Failed {
+                repo: repo.clone(),
+                error: e.to_string(),
+            });
+            engine_ref.clear_cancel_token(&repo).await;
+            return;
+        }
+    };
 
-        // Check durable needs_rebuild flag (set by v2→v3 migration if gating readback failed).
-        let force_rebuild = force_rebuild || {
-            match store::ops::get_meta(&db, "needs_rebuild").await {
-                Ok(Some(v)) if v == "1" => {
-                    info!(repo = %repo, "needs_rebuild flag set — forcing full rebuild");
-                    true
-                }
-                _ => false,
-            }
-        };
+    // Read per-repo ignored paths from index_meta (fresh each run).
+    let per_repo_ignored_paths = store::ops::get_ignored_paths(&db).await.unwrap_or_default();
 
-        let pipeline = {
-            // total in-flight batches = per-key concurrency × number of keys.
-            let n_keys = settings_ref.embedding.api_keys.len().max(1);
-            let configured = settings_ref.embedding.embed_concurrency;
-            let embed_concurrency = configured * n_keys;
-
-            // Build the embedding cache — uses the model name from settings so
-            // different model configurations get isolated cache directories.
-            let embed_cache = if let Some(ref client) = voyage_client {
-                crate::embedding::cache::EmbeddingCache::new(
-                    &engine_ref.embeddings_dir,
-                    client.model(),
-                )
+    // Mask API keys for event display.
+    let key_hints: Vec<String> = settings_ref
+        .embedding
+        .api_keys
+        .iter()
+        .map(|k| {
+            if k.len() > 8 {
+                format!("{}...{}", &k[..4], &k[k.len() - 4..])
             } else {
-                None
-            };
+                "****".to_string()
+            }
+        })
+        .collect();
 
-            IndexPipeline::new_with_concurrency(repo.clone(), voyage_client, embed_concurrency, embed_cache)
-                .with_extra_extensions(settings_ref.custom_extensions.clone())
-                .with_ignore_filenames(settings_ref.index_ignore_filenames.clone())
-                .with_ignore_paths(per_repo_ignored_paths)
+    // Check durable needs_rebuild flag (set by v2→v3 migration if gating readback failed).
+    let force_rebuild = force_rebuild || {
+        match store::ops::get_meta(&db, "needs_rebuild").await {
+            Ok(Some(v)) if v == "1" => {
+                info!(repo = %repo, "needs_rebuild flag set — forcing full rebuild");
+                true
+            }
+            _ => false,
+        }
+    };
+
+    let pipeline = {
+        // total in-flight batches = per-key concurrency × number of keys.
+        let n_keys = settings_ref.embedding.api_keys.len().max(1);
+        let configured = settings_ref.embedding.embed_concurrency;
+        let embed_concurrency = configured * n_keys;
+
+        // Build the embedding cache — uses the model name from settings so
+        // different model configurations get isolated cache directories.
+        let embed_cache = if let Some(ref client) = voyage_client {
+            crate::embedding::cache::EmbeddingCache::new(&engine_ref.embeddings_dir, client.model())
+        } else {
+            None
         };
 
-        match pipeline
-            .run(
+        IndexPipeline::new_with_concurrency(
+            repo.clone(),
+            voyage_client,
+            embed_concurrency,
+            embed_cache,
+        )
+        .with_extra_extensions(settings_ref.custom_extensions.clone())
+        .with_ignore_filenames(settings_ref.index_ignore_filenames.clone())
+        .with_ignore_paths(per_repo_ignored_paths)
+    };
+
+    match pipeline
+        .run(
+            &db,
+            trigger.changes,
+            force_rebuild,
+            Some(&engine_ref.vector_index),
+            Some(progress),
+            Some(&engine_ref.event_bus),
+            &key_hints,
+            Some(cancel_token),
+        )
+        .await
+    {
+        Ok(stats) => {
+            let elapsed_ms = run_start.elapsed().as_millis() as u64;
+            info!(repo = %repo, indexed = stats.indexed_files, "indexing complete");
+            let mut statuses = engine_ref.statuses.write().await;
+            let s = statuses.entry(repo.clone()).or_default();
+            s.state = IndexState::Idle;
+            s.indexed_files = stats.indexed_files;
+            s.total_files = stats.total_files;
+            s.last_indexed_at = Some(Utc::now());
+            s.error = None;
+            // Persist durable timestamp so the MCP tool can check freshness
+            // without relying on in-memory state.
+            let _ = crate::store::ops::set_meta(
                 &db,
-                trigger.changes,
-                force_rebuild,
-                Some(&engine_ref.vector_index),
-                Some(progress),
-                Some(&engine_ref.event_bus),
-                &key_hints,
-                Some(cancel_token),
+                "last_indexed_at",
+                &chrono::Utc::now().to_rfc3339(),
             )
-            .await
-        {
-            Ok(stats) => {
-                let elapsed_ms = run_start.elapsed().as_millis() as u64;
-                info!(repo = %repo, indexed = stats.indexed_files, "indexing complete");
+            .await;
+            // Clear needs_rebuild flag after successful rebuild.
+            if force_rebuild {
+                let _ = db
+                    .query("DELETE FROM index_meta WHERE key = 'needs_rebuild'")
+                    .await;
+            }
+            engine_ref.event_bus.emit(IndexEvent::Completed {
+                repo: repo.clone(),
+                indexed_files: stats.indexed_files,
+                total_files: stats.total_files,
+                elapsed_ms,
+            });
+        }
+        Err(e) => {
+            let err_str = format!("{e:#}");
+            let is_cancelled = err_str.contains("cancelled");
+            if is_cancelled {
+                info!(repo = %repo, "indexing cancelled by user");
                 let mut statuses = engine_ref.statuses.write().await;
                 let s = statuses.entry(repo.clone()).or_default();
                 s.state = IndexState::Idle;
-                s.indexed_files = stats.indexed_files;
-                s.total_files = stats.total_files;
-                s.last_indexed_at = Some(Utc::now());
                 s.error = None;
-                // Persist durable timestamp so the MCP tool can check freshness
-                // without relying on in-memory state.
-                let _ = crate::store::ops::set_meta(&db, "last_indexed_at", &chrono::Utc::now().to_rfc3339()).await;
-                // Clear needs_rebuild flag after successful rebuild.
-                if force_rebuild {
-                    let _ = db.query("DELETE FROM index_meta WHERE key = 'needs_rebuild'").await;
-                }
-                engine_ref.event_bus.emit(IndexEvent::Completed {
+                engine_ref
+                    .event_bus
+                    .emit(IndexEvent::Cancelled { repo: repo.clone() });
+            } else {
+                error!(repo = %repo, error = %err_str, "indexing failed");
+                let mut statuses = engine_ref.statuses.write().await;
+                let s = statuses.entry(repo.clone()).or_default();
+                s.state = IndexState::Error;
+                s.error = Some(err_str.clone());
+                engine_ref.event_bus.emit(IndexEvent::Failed {
                     repo: repo.clone(),
-                    indexed_files: stats.indexed_files,
-                    total_files: stats.total_files,
-                    elapsed_ms,
+                    error: err_str,
                 });
             }
-            Err(e) => {
-                let err_str = format!("{e:#}");
-                let is_cancelled = err_str.contains("cancelled");
-                if is_cancelled {
-                    info!(repo = %repo, "indexing cancelled by user");
-                    let mut statuses = engine_ref.statuses.write().await;
-                    let s = statuses.entry(repo.clone()).or_default();
-                    s.state = IndexState::Idle;
-                    s.error = None;
-                    engine_ref.event_bus.emit(IndexEvent::Cancelled {
-                        repo: repo.clone(),
-                    });
-                } else {
-                    error!(repo = %repo, error = %err_str, "indexing failed");
-                    let mut statuses = engine_ref.statuses.write().await;
-                    let s = statuses.entry(repo.clone()).or_default();
-                    s.state = IndexState::Error;
-                    s.error = Some(err_str.clone());
-                    engine_ref.event_bus.emit(IndexEvent::Failed {
-                        repo: repo.clone(),
-                        error: err_str,
-                    });
-                }
-            }
         }
-        engine_ref.clear_cancel_token(&repo).await;
     }
+    engine_ref.clear_cancel_token(&repo).await;
 }
 
 #[cfg(test)]
@@ -817,7 +856,9 @@ mod load_repos_tests {
     /// uncached `open_db` on the same path would deadlock on the lock file —
     /// seeding through `get_or_open` keeps a single handle, mirroring real usage.
     async fn seed_repo(repo_dbs: &RepoDbMap, home: &std::path::Path, repo: &str, n: usize) {
-        let db = store::get_or_open(repo_dbs, home, repo).await.expect("get_or_open");
+        let db = store::get_or_open(repo_dbs, home, repo)
+            .await
+            .expect("get_or_open");
         for i in 0..n {
             let q = format!(
                 "CREATE chunk SET file = '{repo}/f{i}.rs', line_start = 1, line_end = 2, \
@@ -862,7 +903,9 @@ mod load_repos_tests {
     /// map (single cached handle per repo — see [`seed_repo`] for why RocksDB
     /// requires this).
     async fn seed_file_meta(repo_dbs: &RepoDbMap, home: &std::path::Path, repo: &str, n: usize) {
-        let db = store::get_or_open(repo_dbs, home, repo).await.expect("get_or_open");
+        let db = store::get_or_open(repo_dbs, home, repo)
+            .await
+            .expect("get_or_open");
         for i in 0..n {
             let path = format!("{repo}/f{i}.rs");
             db.query("CREATE file_meta SET path = $path, mtime = 0, size = 1, repo = $repo, chunk_count = 1;")
@@ -888,7 +931,9 @@ mod load_repos_tests {
         let repo_dbs: RepoDbMap = Arc::new(RwLock::new(HashMap::new()));
         seed_file_meta(&repo_dbs, home.path(), &indexed, 5).await;
         // `empty` gets a DB (cached) but no file_meta rows.
-        let _ = store::get_or_open(&repo_dbs, home.path(), &empty).await.expect("get_or_open");
+        let _ = store::get_or_open(&repo_dbs, home.path(), &empty)
+            .await
+            .expect("get_or_open");
 
         let statuses: Arc<RwLock<HashMap<String, RepoStatus>>> =
             Arc::new(RwLock::new(HashMap::new()));
@@ -898,12 +943,17 @@ mod load_repos_tests {
             m.insert(empty.clone(), RepoStatus::default());
         }
 
-        seed_statuses_from_db(&statuses, &repo_dbs, home.path(), &[indexed_raw, empty_raw])
-            .await;
+        seed_statuses_from_db(&statuses, &repo_dbs, home.path(), &[indexed_raw, empty_raw]).await;
 
         let m = statuses.read().await;
-        assert_eq!(m[&indexed].indexed_files, 5, "indexed repo must restore its file count");
-        assert_eq!(m[&empty].indexed_files, 0, "never-indexed repo must stay at 0");
+        assert_eq!(
+            m[&indexed].indexed_files, 5,
+            "indexed repo must restore its file count"
+        );
+        assert_eq!(
+            m[&empty].indexed_files, 0,
+            "never-indexed repo must stay at 0"
+        );
     }
 
     /// A run that has already advanced a repo's status by the time the seed task
@@ -922,15 +972,25 @@ mod load_repos_tests {
             let mut m = statuses.write().await;
             m.insert(
                 repo.clone(),
-                RepoStatus { state: IndexState::Indexing, ..Default::default() },
+                RepoStatus {
+                    state: IndexState::Indexing,
+                    ..Default::default()
+                },
             );
         }
 
         seed_statuses_from_db(&statuses, &repo_dbs, home.path(), &[repo_raw]).await;
 
         let m = statuses.read().await;
-        assert_eq!(m[&repo].state, IndexState::Indexing, "in-flight run must survive the seed");
-        assert_eq!(m[&repo].indexed_files, 0, "seed must not overwrite a live run's numerator");
+        assert_eq!(
+            m[&repo].state,
+            IndexState::Indexing,
+            "in-flight run must survive the seed"
+        );
+        assert_eq!(
+            m[&repo].indexed_files, 0,
+            "seed must not overwrite a live run's numerator"
+        );
     }
 
     /// Single-flight coalescing: concurrent `warm_repo_blocking` calls for the same

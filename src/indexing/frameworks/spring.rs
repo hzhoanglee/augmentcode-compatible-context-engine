@@ -4,8 +4,8 @@
 //! Edge extraction: `@GetMapping`/`@PostMapping`/`@Autowired` annotations → routing
 //! and dependency injection edges.
 
-use std::sync::LazyLock;
 use regex::Regex;
+use std::sync::LazyLock;
 
 use crate::indexing::frameworks::{DetectionContext, FrameworkResolver};
 use crate::parsing::relations::{EdgeKind, EdgeTarget, RawEdge};
@@ -15,7 +15,8 @@ pub struct SpringResolver;
 
 /// Matches `@Autowired` followed by a type name (field or constructor injection).
 static AUTOWIRED_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"@Autowired\s*(?:\n\s*)?(?:private\s+|protected\s+|public\s+)?([A-Z]\w*)\s+\w+").unwrap()
+    Regex::new(r"@Autowired\s*(?:\n\s*)?(?:private\s+|protected\s+|public\s+)?([A-Z]\w*)\s+\w+")
+        .unwrap()
 });
 
 /// Matches Spring mapping annotations with optional path.
@@ -95,11 +96,7 @@ impl FrameworkResolver for SpringResolver {
             // Find the method name that follows the annotation
             let remaining = &source[match_pos..];
             if let Some(method_cap) = find_next_method_name(remaining) {
-                let line = source[..match_pos]
-                    .chars()
-                    .filter(|&c| c == '\n')
-                    .count() as u32
-                    + 1;
+                let line = source[..match_pos].chars().filter(|&c| c == '\n').count() as u32 + 1;
 
                 edges.push(RawEdge {
                     from: containing_class.clone(),
@@ -171,10 +168,13 @@ public class UserController {
             parent_fqn: None,
         }];
         let edges = SpringResolver.extract_edges("UserController.java", source, &symbols);
-        let names: Vec<&str> = edges.iter().map(|e| match &e.to {
-            EdgeTarget::Unresolved { name, .. } => name.as_str(),
-            _ => "",
-        }).collect();
+        let names: Vec<&str> = edges
+            .iter()
+            .map(|e| match &e.to {
+                EdgeTarget::Unresolved { name, .. } => name.as_str(),
+                _ => "",
+            })
+            .collect();
         assert!(names.contains(&"UserService"));
         assert!(names.contains(&"AuthService"));
     }
@@ -203,10 +203,13 @@ public class UserController {
             parent_fqn: None,
         }];
         let edges = SpringResolver.extract_edges("UserController.java", source, &symbols);
-        let names: Vec<&str> = edges.iter().map(|e| match &e.to {
-            EdgeTarget::Unresolved { name, .. } => name.as_str(),
-            _ => "",
-        }).collect();
+        let names: Vec<&str> = edges
+            .iter()
+            .map(|e| match &e.to {
+                EdgeTarget::Unresolved { name, .. } => name.as_str(),
+                _ => "",
+            })
+            .collect();
         assert!(names.contains(&"getUsers"));
     }
 }

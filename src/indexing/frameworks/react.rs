@@ -4,8 +4,8 @@
 //! Edge extraction: Capitalized JSX tag names in .tsx/.jsx files → Calls edge
 //! from containing function to the component name.
 
-use std::sync::LazyLock;
 use regex::Regex;
+use std::sync::LazyLock;
 
 use crate::indexing::frameworks::{DetectionContext, FrameworkResolver};
 use crate::parsing::relations::{EdgeKind, EdgeTarget, RawEdge};
@@ -14,9 +14,8 @@ use crate::parsing::symbols::{QualifiedSymbol, Symbol};
 pub struct ReactResolver;
 
 /// Matches capitalized JSX tags like `<UserProfile` or `<App.Header`
-static JSX_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"<([A-Z][A-Za-z0-9]*(?:\.[A-Z][A-Za-z0-9]*)*)[\s/>]").unwrap()
-});
+static JSX_TAG_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<([A-Z][A-Za-z0-9]*(?:\.[A-Z][A-Za-z0-9]*)*)[\s/>]").unwrap());
 
 impl FrameworkResolver for ReactResolver {
     fn name(&self) -> &str {
@@ -162,10 +161,13 @@ function App() {
         }];
 
         let edges = ReactResolver.extract_edges("src/App.tsx", source, &symbols);
-        let names: Vec<&str> = edges.iter().map(|e| match &e.to {
-            EdgeTarget::Unresolved { name, .. } => name.as_str(),
-            _ => "",
-        }).collect();
+        let names: Vec<&str> = edges
+            .iter()
+            .map(|e| match &e.to {
+                EdgeTarget::Unresolved { name, .. } => name.as_str(),
+                _ => "",
+            })
+            .collect();
         assert!(names.contains(&"UserProfile"));
         assert!(names.contains(&"Header"));
         // Should not contain lowercase tags

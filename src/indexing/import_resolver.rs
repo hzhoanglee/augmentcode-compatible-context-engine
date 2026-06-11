@@ -20,8 +20,14 @@ use crate::parsing::Lang;
 
 /// Extensions to try when resolving TS/JS imports (order matters — first match wins).
 const TS_JS_EXTENSIONS: &[&str] = &[
-    ".ts", ".tsx", ".js", ".jsx",
-    "/index.ts", "/index.tsx", "/index.js", "/index.jsx",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    "/index.ts",
+    "/index.tsx",
+    "/index.js",
+    "/index.jsx",
 ];
 
 const PYTHON_EXTENSIONS: &[&str] = &[".py", "/__init__.py"];
@@ -62,11 +68,7 @@ pub fn resolve_import_path(
 
 // ─── TS/JS resolution ────────────────────────────────────────────────────
 
-fn resolve_ts_js(
-    import_path: &str,
-    from_file: &str,
-    file_set: &HashSet<String>,
-) -> Option<String> {
+fn resolve_ts_js(import_path: &str, from_file: &str, file_set: &HashSet<String>) -> Option<String> {
     // 1. Try tsconfig paths alias resolution first
     if let Some(resolved) = resolve_tsconfig_alias(import_path, from_file, file_set) {
         return Some(resolved);
@@ -143,7 +145,8 @@ fn parse_tsconfig_paths(content: &str) -> Option<Vec<(String, Vec<String>)>> {
     let mut result = Vec::new();
     for (key, val) in paths {
         if let Some(arr) = val.as_array() {
-            let targets: Vec<String> = arr.iter()
+            let targets: Vec<String> = arr
+                .iter()
                 .filter_map(|v| v.as_str().map(|s| s.to_string()))
                 .collect();
             result.push((key.clone(), targets));
@@ -195,11 +198,7 @@ fn resolve_python(
 
 // ─── Go resolution ───────────────────────────────────────────────────────
 
-fn resolve_go(
-    import_path: &str,
-    from_file: &str,
-    file_set: &HashSet<String>,
-) -> Option<String> {
+fn resolve_go(import_path: &str, from_file: &str, file_set: &HashSet<String>) -> Option<String> {
     // Try to find go.mod and strip the module prefix
     let go_mod_path = find_config_file(from_file, &["go.mod"], file_set)?;
     let go_mod_dir = Path::new(&go_mod_path).parent()?;
@@ -240,11 +239,7 @@ fn parse_go_mod_module(content: &str) -> Option<String> {
 
 // ─── Rust resolution ─────────────────────────────────────────────────────
 
-fn resolve_rust(
-    import_path: &str,
-    from_file: &str,
-    file_set: &HashSet<String>,
-) -> Option<String> {
+fn resolve_rust(import_path: &str, from_file: &str, file_set: &HashSet<String>) -> Option<String> {
     let path = import_path.trim();
 
     // Handle crate:: prefix — resolve relative to the crate root (src/)
@@ -301,9 +296,13 @@ fn normalize_relative(base: &Path, relative: &str) -> String {
     let mut components = Vec::new();
     for comp in target.components() {
         match comp {
-            std::path::Component::ParentDir => { components.pop(); }
+            std::path::Component::ParentDir => {
+                components.pop();
+            }
             std::path::Component::CurDir => {}
-            _ => { components.push(comp); }
+            _ => {
+                components.push(comp);
+            }
         }
     }
     let result: std::path::PathBuf = components.into_iter().collect();
@@ -508,9 +507,7 @@ mod tests {
 
     #[test]
     fn ts_index_file_resolution() {
-        let file_set = make_file_set(&[
-            "/project/src/utils/index.ts",
-        ]);
+        let file_set = make_file_set(&["/project/src/utils/index.ts"]);
         let result = resolve_import_path(
             "./utils",
             "/project/src/app.ts",
@@ -522,23 +519,14 @@ mod tests {
 
     #[test]
     fn ts_tsx_extension_probing() {
-        let file_set = make_file_set(&[
-            "/project/src/Button.tsx",
-        ]);
-        let result = resolve_import_path(
-            "./Button",
-            "/project/src/App.tsx",
-            Lang::Tsx,
-            &file_set,
-        );
+        let file_set = make_file_set(&["/project/src/Button.tsx"]);
+        let result = resolve_import_path("./Button", "/project/src/App.tsx", Lang::Tsx, &file_set);
         assert_eq!(result, Some("/project/src/Button.tsx".to_string()));
     }
 
     #[test]
     fn ts_nonrelative_suffix_match() {
-        let file_set = make_file_set(&[
-            "/project/src/services/auth.ts",
-        ]);
+        let file_set = make_file_set(&["/project/src/services/auth.ts"]);
         let result = resolve_import_path(
             "services/auth",
             "/project/src/app.ts",
@@ -552,9 +540,7 @@ mod tests {
 
     #[test]
     fn python_dotted_import() {
-        let file_set = make_file_set(&[
-            "/project/app/models/user.py",
-        ]);
+        let file_set = make_file_set(&["/project/app/models/user.py"]);
         let result = resolve_import_path(
             "app/models/user",
             "/project/main.py",
@@ -566,23 +552,14 @@ mod tests {
 
     #[test]
     fn python_package_init() {
-        let file_set = make_file_set(&[
-            "/project/app/models/__init__.py",
-        ]);
-        let result = resolve_import_path(
-            "app/models",
-            "/project/main.py",
-            Lang::Python,
-            &file_set,
-        );
+        let file_set = make_file_set(&["/project/app/models/__init__.py"]);
+        let result = resolve_import_path("app/models", "/project/main.py", Lang::Python, &file_set);
         assert_eq!(result, Some("/project/app/models/__init__.py".to_string()));
     }
 
     #[test]
     fn python_relative_import() {
-        let file_set = make_file_set(&[
-            "/project/app/utils.py",
-        ]);
+        let file_set = make_file_set(&["/project/app/utils.py"]);
         let result = resolve_import_path(
             "./utils",
             "/project/app/handler.py",
@@ -596,9 +573,7 @@ mod tests {
 
     #[test]
     fn rust_crate_prefix() {
-        let file_set = make_file_set(&[
-            "/project/src/config.rs",
-        ]);
+        let file_set = make_file_set(&["/project/src/config.rs"]);
         let result = resolve_import_path(
             "crate::config",
             "/project/src/main.rs",
@@ -610,23 +585,22 @@ mod tests {
 
     #[test]
     fn rust_crate_nested_module() {
-        let file_set = make_file_set(&[
-            "/project/src/indexing/pipeline.rs",
-        ]);
+        let file_set = make_file_set(&["/project/src/indexing/pipeline.rs"]);
         let result = resolve_import_path(
             "crate::indexing/pipeline",
             "/project/src/main.rs",
             Lang::Rust,
             &file_set,
         );
-        assert_eq!(result, Some("/project/src/indexing/pipeline.rs".to_string()));
+        assert_eq!(
+            result,
+            Some("/project/src/indexing/pipeline.rs".to_string())
+        );
     }
 
     #[test]
     fn rust_self_prefix() {
-        let file_set = make_file_set(&[
-            "/project/src/indexing/walker.rs",
-        ]);
+        let file_set = make_file_set(&["/project/src/indexing/walker.rs"]);
         let result = resolve_import_path(
             "self::walker",
             "/project/src/indexing/mod.rs",
@@ -638,9 +612,7 @@ mod tests {
 
     #[test]
     fn rust_super_prefix() {
-        let file_set = make_file_set(&[
-            "/project/src/config.rs",
-        ]);
+        let file_set = make_file_set(&["/project/src/config.rs"]);
         let result = resolve_import_path(
             "super::config",
             "/project/src/indexing/mod.rs",
@@ -701,13 +673,11 @@ mod tests {
             "/project/src/components/index.ts",
             "/project/src/components/Button.tsx",
         ]);
-        let result = chase_reexports(
-            "/project/src/components/index.ts",
-            "Button",
-            &file_set,
-            0,
+        let result = chase_reexports("/project/src/components/index.ts", "Button", &file_set, 0);
+        assert_eq!(
+            result,
+            Some("/project/src/components/Button.tsx".to_string())
         );
-        assert_eq!(result, Some("/project/src/components/Button.tsx".to_string()));
     }
 
     #[test]
@@ -716,12 +686,7 @@ mod tests {
             "/project/app/models/__init__.py",
             "/project/app/models/user.py",
         ]);
-        let result = chase_reexports(
-            "/project/app/models/__init__.py",
-            "User",
-            &file_set,
-            0,
-        );
+        let result = chase_reexports("/project/app/models/__init__.py", "User", &file_set, 0);
         // Finds lowercase variant
         assert_eq!(result, Some("/project/app/models/user.py".to_string()));
     }
@@ -733,43 +698,26 @@ mod tests {
             "/project/src/components/Button/index.ts",
             "/project/src/components/Button/Button.tsx",
         ]);
-        let result = chase_reexports(
-            "/project/src/components/index.ts",
-            "Button",
-            &file_set,
-            0,
-        );
+        let result = chase_reexports("/project/src/components/index.ts", "Button", &file_set, 0);
         // Should find the deeper Button.tsx via subdirectory barrel recursion
-        assert_eq!(result, Some("/project/src/components/Button/Button.tsx".to_string()));
+        assert_eq!(
+            result,
+            Some("/project/src/components/Button/Button.tsx".to_string())
+        );
     }
 
     #[test]
     fn chase_reexports_non_barrel_returns_none() {
-        let file_set = make_file_set(&[
-            "/project/src/utils.ts",
-            "/project/src/Button.tsx",
-        ]);
-        let result = chase_reexports(
-            "/project/src/utils.ts",
-            "Button",
-            &file_set,
-            0,
-        );
+        let file_set = make_file_set(&["/project/src/utils.ts", "/project/src/Button.tsx"]);
+        let result = chase_reexports("/project/src/utils.ts", "Button", &file_set, 0);
         assert_eq!(result, None);
     }
 
     #[test]
     fn chase_reexports_depth_limit() {
-        let file_set = make_file_set(&[
-            "/project/src/index.ts",
-        ]);
+        let file_set = make_file_set(&["/project/src/index.ts"]);
         // depth > 8 should return None immediately
-        let result = chase_reexports(
-            "/project/src/index.ts",
-            "Foo",
-            &file_set,
-            9,
-        );
+        let result = chase_reexports("/project/src/index.ts", "Foo", &file_set, 9);
         assert_eq!(result, None);
     }
 }

@@ -6,11 +6,11 @@
 //! and an `extract_edges` method that produces additional `RawEdge`s from source
 //! files belonging to that framework.
 
-pub mod react;
-pub mod express;
 pub mod django;
-pub mod spring;
+pub mod express;
 pub mod go_gin;
+pub mod react;
+pub mod spring;
 
 use std::collections::HashSet;
 
@@ -98,7 +98,10 @@ impl FrameworkRegistry {
     /// Names of active frameworks (for diagnostics/logging).
     #[allow(dead_code)]
     pub fn active_names(&self) -> Vec<&str> {
-        self.active.iter().map(|&i| self.resolvers[i].name()).collect()
+        self.active
+            .iter()
+            .map(|&i| self.resolvers[i].name())
+            .collect()
     }
 }
 

@@ -130,8 +130,10 @@ pub async fn open_db(data_dir: &Path, repo_path: &str) -> Result<Surreal<Db>> {
     let db = match db_opt {
         Some(db) => db,
         None => {
-            return Err(anyhow::Error::new(last_err.expect("loop sets last_err on failure")))
-                .context("open surrealdb");
+            return Err(anyhow::Error::new(
+                last_err.expect("loop sets last_err on failure"),
+            ))
+            .context("open surrealdb");
         }
     };
 
@@ -163,7 +165,11 @@ pub fn maybe_spawn_migration(repo_dbs: RepoDbMap, repo: String, stored_version: 
     if stored_version >= DB_SCHEMA_VERSION {
         return;
     }
-    info!(stored_version, target = DB_SCHEMA_VERSION, "spawning chained DB migration background task");
+    info!(
+        stored_version,
+        target = DB_SCHEMA_VERSION,
+        "spawning chained DB migration background task"
+    );
     // Run all needed migrations in one chained task so each completes before the
     // next starts. A failed step aborts the chain via `?` (the version stamp is only
     // written on success, so the next open retries from the same point).
@@ -281,7 +287,10 @@ pub async fn run_migration_v1_to_v2(db: &Surreal<Db>) -> Result<()> {
             }
 
             // Advance cursor to the last id_str in this page.
-            cursor = batch.last().map(|r| r.id_str.clone()).unwrap_or(cursor.clone());
+            cursor = batch
+                .last()
+                .map(|r| r.id_str.clone())
+                .unwrap_or(cursor.clone());
 
             // Update each row by its OWN record id. This is the per-edge fix:
             // we update exactly the row whose in.name/out.name we read — never
@@ -312,7 +321,8 @@ pub async fn run_migration_v1_to_v2(db: &Surreal<Db>) -> Result<()> {
         }
 
         // Clean up cursor key.
-        let _ = db.query("DELETE FROM index_meta WHERE key = $k")
+        let _ = db
+            .query("DELETE FROM index_meta WHERE key = $k")
             .bind(("k", cursor_key))
             .await;
     }
@@ -354,11 +364,16 @@ pub async fn run_migration_v1_to_v2(db: &Surreal<Db>) -> Result<()> {
             }
 
             // Advance cursor.
-            cursor = batch.last().map(|r| r.path.clone()).unwrap_or(cursor.clone());
+            cursor = batch
+                .last()
+                .map(|r| r.path.clone())
+                .unwrap_or(cursor.clone());
 
             for row in &batch {
                 #[derive(Deserialize)]
-                struct CountRow { count: i64 }
+                struct CountRow {
+                    count: i64,
+                }
                 let count_rows: Vec<CountRow> = db
                     .query("SELECT count() AS count FROM chunk WHERE file = $f GROUP ALL")
                     .bind(("f", row.path.clone()))
@@ -386,7 +401,8 @@ pub async fn run_migration_v1_to_v2(db: &Surreal<Db>) -> Result<()> {
         }
 
         // Clean up cursor key.
-        let _ = db.query("DELETE FROM index_meta WHERE key = $k")
+        let _ = db
+            .query("DELETE FROM index_meta WHERE key = $k")
             .bind(("k", cursor_key))
             .await;
     }
@@ -425,7 +441,7 @@ pub async fn run_migration_v2_to_v3(db: &Surreal<Db>) -> Result<()> {
          REMOVE FIELD line_start ON chunk;\
          REMOVE FIELD line_end ON chunk;\
          REMOVE FIELD content ON chunk;\
-         REMOVE FIELD symbol_ref ON chunk;"
+         REMOVE FIELD symbol_ref ON chunk;",
     )
     .await
     .context("migration v2→v3: flip chunk to SCHEMALESS + remove fields")?;
@@ -588,7 +604,10 @@ pub async fn run_migration_v4_to_v5(db: &Surreal<Db>) -> Result<()> {
         }
 
         // Advance cursor to the last id_str in this page.
-        cursor = batch.last().map(|r| r.id_str.clone()).unwrap_or(cursor.clone());
+        cursor = batch
+            .last()
+            .map(|r| r.id_str.clone())
+            .unwrap_or(cursor.clone());
 
         // Re-encode each row's embedding as packed bytes, updating by its OWN id.
         for row in &batch {
@@ -612,7 +631,8 @@ pub async fn run_migration_v4_to_v5(db: &Surreal<Db>) -> Result<()> {
     }
 
     // Clean up cursor key.
-    let _ = db.query("DELETE FROM index_meta WHERE key = $k")
+    let _ = db
+        .query("DELETE FROM index_meta WHERE key = $k")
         .bind(("k", cursor_key))
         .await;
 
@@ -704,11 +724,7 @@ pub async fn remove_index_dir(data_dir: &Path, repo: &str) -> bool {
     !still
 }
 
-pub async fn get_or_open(
-    repo_dbs: &RepoDbMap,
-    data_dir: &Path,
-    repo: &str,
-) -> Result<Surreal<Db>> {
+pub async fn get_or_open(repo_dbs: &RepoDbMap, data_dir: &Path, repo: &str) -> Result<Surreal<Db>> {
     let repo = &normalize_repo_path(repo);
     // Fast path: already cached.
     if let Some(db) = repo_dbs.read().await.get(repo.as_str()) {
@@ -772,7 +788,6 @@ pub async fn open_if_indexed(
     get_or_open(repo_dbs, data_dir, &repo).await.map(Some)
 }
 
-
 #[cfg(test)]
 mod isolation_repro {
     use super::*;
@@ -797,7 +812,9 @@ mod isolation_repro {
 
         // The shared cache opens the single authoritative handle.
         let map: RepoDbMap = Arc::new(RwLock::new(HashMap::new()));
-        let sa = get_or_open(&map, home.path(), repo).await.expect("shared A");
+        let sa = get_or_open(&map, home.path(), repo)
+            .await
+            .expect("shared A");
         assert_eq!(
             ops::count_chunks(&sa).await.unwrap(),
             0,
@@ -816,7 +833,9 @@ mod isolation_repro {
 
         // ── PART 2: the shared cached handle reads its own writes ───────────────
         // A second get_or_open returns the SAME cached instance (no new lock).
-        let sb = get_or_open(&map, home.path(), repo).await.expect("shared B");
+        let sb = get_or_open(&map, home.path(), repo)
+            .await
+            .expect("shared B");
         sb.query(
             "CREATE chunk SET file = '/x/f.rs', line_start = 3, line_end = 4, \
              content = 'y', embedding = [0.5, 0.6, 0.7, 0.8], symbol_ref = NONE;",
@@ -826,8 +845,7 @@ mod isolation_repro {
 
         let sa_after = ops::count_chunks(&sa).await.unwrap();
         assert_eq!(
-            sa_after,
-            1,
+            sa_after, 1,
             "shared handle must see writes made through the same cached instance"
         );
     }
@@ -861,11 +879,17 @@ mod open_concurrency {
             }));
         }
         for h in handles {
-            h.await.unwrap().expect("every concurrent open must succeed (no lock race)");
+            h.await
+                .unwrap()
+                .expect("every concurrent open must succeed (no lock race)");
         }
 
         // Exactly one handle ended up cached.
-        assert_eq!(map.read().await.len(), 1, "exactly one cached handle per repo");
+        assert_eq!(
+            map.read().await.len(),
+            1,
+            "exactly one cached handle per repo"
+        );
     }
 
     /// `open_if_indexed` returns None for a never-indexed repo (no DB directory on
@@ -885,7 +909,11 @@ mod open_concurrency {
             !db_path(home.path(), repo).exists(),
             "open_if_indexed must NOT create the DB directory for an unindexed repo"
         );
-        assert_eq!(map.read().await.len(), 0, "no handle cached for an unindexed repo");
+        assert_eq!(
+            map.read().await.len(),
+            0,
+            "no handle cached for an unindexed repo"
+        );
 
         // After a real open, the directory exists → Some, and the handle is shared.
         let _opened = get_or_open(&map, home.path(), repo).await.expect("open");
@@ -921,8 +949,8 @@ mod stale_schema {
     use surrealdb::engine::local::{Db, RocksDb};
     use tempfile::TempDir;
 
-    use crate::store::schema::SCHEMA_DDL;
     use crate::store::ops::count_chunks;
+    use crate::store::schema::SCHEMA_DDL;
 
     /// Open a raw SurrealKV DB (no DDL applied) on a TempDir.
     /// The caller is responsible for applying whatever schema it needs.
@@ -932,7 +960,10 @@ mod stale_schema {
         let db = Surreal::new::<RocksDb>(path.to_str().unwrap())
             .await
             .expect("open raw db");
-        db.use_ns("context_engine").use_db(name).await.expect("ns/db");
+        db.use_ns("context_engine")
+            .use_db(name)
+            .await
+            .expect("ns/db");
         db
     }
 
@@ -1033,14 +1064,15 @@ mod stale_schema {
             "DEFINE TABLE IF NOT EXISTS index_meta SCHEMAFULL;\
              DEFINE FIELD OVERWRITE key ON index_meta TYPE string;\
              DEFINE FIELD OVERWRITE value ON index_meta TYPE string;\
-             DEFINE INDEX IF NOT EXISTS idx_meta_key ON index_meta FIELDS key UNIQUE;"
+             DEFINE INDEX IF NOT EXISTS idx_meta_key ON index_meta FIELDS key UNIQUE;",
         )
         .await
         .expect("setup index_meta for migration")
         .check()
         .expect("index_meta setup check");
 
-        crate::store::run_migration_v2_to_v3(&db).await
+        crate::store::run_migration_v2_to_v3(&db)
+            .await
             .expect("v2→v3 migration must succeed");
 
         // ── 6. Attempt the real writer's statement (mirroring pipeline.rs) ───
@@ -1056,9 +1088,7 @@ mod stale_schema {
 
         let mut resp = db.query(txn).await.expect(".await must not fail");
         let errors = resp.take_errors();
-        println!(
-            "STALE-SCHEMA WRITE RESULT: errors = {errors:?}"
-        );
+        println!("STALE-SCHEMA WRITE RESULT: errors = {errors:?}");
 
         const GENERIC: &str = "The query was not executed due to a failed transaction";
         let real_error: Vec<_> = errors
@@ -1077,8 +1107,7 @@ mod stale_schema {
         let count = count_chunks(&db).await.unwrap();
         println!("STALE-SCHEMA WRITE: chunk count after commit = {count}");
         assert_eq!(
-            count,
-            1,
+            count, 1,
             "chunk must persist after migration (got {count}); \
              transaction is still rolling back due to stale field type"
         );
@@ -1121,8 +1150,7 @@ mod stale_schema {
         let after = count_chunks(&db).await.unwrap();
         println!("TABLE-REDEF: rows before={before}, after={after}");
         assert_eq!(
-            after,
-            before,
+            after, before,
             "DEFINE TABLE IF NOT EXISTS must not drop existing rows (before={before}, after={after})"
         );
     }
@@ -1184,7 +1212,8 @@ mod migration_tests {
         assert_eq!(v, 2);
 
         // Simulate a "resume" by clearing the version key and re-running.
-        let _ = db.query("DELETE FROM index_meta WHERE key = $k")
+        let _ = db
+            .query("DELETE FROM index_meta WHERE key = $k")
             .bind(("k", DB_SCHEMA_VERSION_KEY))
             .await;
         let v_cleared = read_db_schema_version(&db).await;
@@ -1209,7 +1238,10 @@ mod schemaless_tests {
         let db = Surreal::new::<RocksDb>(path.to_str().unwrap())
             .await
             .expect("open raw db");
-        db.use_ns("context_engine").use_db(name).await.expect("ns/db");
+        db.use_ns("context_engine")
+            .use_db(name)
+            .await
+            .expect("ns/db");
         db
     }
 
@@ -1233,15 +1265,12 @@ mod schemaless_tests {
         let repo = "/test/schemaless_roundtrip";
         let db = open_db(home.path(), repo).await.unwrap();
 
-        let embeddings: Vec<Vec<f32>> = vec![
-            emb_1024(1.0),
-            emb_1024(2.0),
-            emb_1024(3.0),
-        ];
+        let embeddings: Vec<Vec<f32>> = vec![emb_1024(1.0), emb_1024(2.0), emb_1024(3.0)];
         let files = ["/repo/a.rs", "/repo/b.rs", "/repo/c.rs"];
 
         for (i, emb) in embeddings.iter().enumerate() {
-            let emb_str: String = emb.iter()
+            let emb_str: String = emb
+                .iter()
                 .map(|v| v.to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
@@ -1298,12 +1327,17 @@ mod schemaless_tests {
             DEFINE FIELD OVERWRITE key ON index_meta TYPE string;\
             DEFINE FIELD OVERWRITE value ON index_meta TYPE string;\
             DEFINE INDEX IF NOT EXISTS idx_meta_key ON index_meta FIELDS key UNIQUE;";
-        db.query(old_ddl).await.expect("old DDL").check().expect("old DDL check");
+        db.query(old_ddl)
+            .await
+            .expect("old DDL")
+            .check()
+            .expect("old DDL check");
 
         // Write one chunk with a 1024-dim embedding via raw query (bypassing SCHEMAFULL
         // embedding type — we didn't define it typed so it stores as SCHEMALESS for embedding).
         let emb = emb_1024(42.0);
-        let emb_str: String = emb.iter()
+        let emb_str: String = emb
+            .iter()
             .map(|v| v.to_string())
             .collect::<Vec<_>>()
             .join(", ");
@@ -1323,7 +1357,9 @@ mod schemaless_tests {
 
         // Read back the embedding and assert it's intact.
         #[derive(Deserialize)]
-        struct Row { embedding: Vec<f32> }
+        struct Row {
+            embedding: Vec<f32>,
+        }
         let rows: Vec<Row> = db
             .query("SELECT embedding FROM chunk WHERE embedding IS NOT NONE LIMIT 1")
             .await
@@ -1332,10 +1368,18 @@ mod schemaless_tests {
             .expect("take(0)");
 
         assert_eq!(rows.len(), 1, "must have one chunk after migration");
-        assert_eq!(rows[0].embedding.len(), 1024, "embedding must be 1024-dim after migration");
+        assert_eq!(
+            rows[0].embedding.len(),
+            1024,
+            "embedding must be 1024-dim after migration"
+        );
         // Check first and last value are close to the seeded values.
         let diff_first = (rows[0].embedding[0] - emb[0]).abs();
-        assert!(diff_first < 1e-4, "first embedding value must match: {}", diff_first);
+        assert!(
+            diff_first < 1e-4,
+            "first embedding value must match: {}",
+            diff_first
+        );
     }
 
     /// 6c. needs_rebuild flag lifecycle.
@@ -1380,7 +1424,8 @@ mod schemaless_tests {
         // Write 2 chunks with real 1024-dim embeddings.
         for i in 0..2_usize {
             let emb = emb_1024(i as f32 + 1.0);
-            let emb_str: String = emb.iter()
+            let emb_str: String = emb
+                .iter()
                 .map(|v| v.to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
@@ -1395,7 +1440,7 @@ mod schemaless_tests {
         // Write 1 chunk with an empty [] embedding.
         db.query(
             "INSERT INTO chunk { file: '/repo/empty.rs', line_start: 1, line_end: 5, \
-             content: 'empty', embedding: [], symbol_ref: NONE }"
+             content: 'empty', embedding: [], symbol_ref: NONE }",
         )
         .await
         .expect("insert empty chunk");
@@ -1403,7 +1448,10 @@ mod schemaless_tests {
         // The IS NOT NONE filter should include ALL rows ([] is not NONE).
         // This matches the behavior documented in the plan for test 6d.
         #[derive(serde::Deserialize)]
-        struct CountRow { #[allow(dead_code)] file: String }
+        struct CountRow {
+            #[allow(dead_code)]
+            file: String,
+        }
         let all_rows: Vec<CountRow> = db
             .query("SELECT file FROM chunk WHERE embedding IS NOT NONE")
             .await
@@ -1411,7 +1459,8 @@ mod schemaless_tests {
             .take(0)
             .expect("take");
         assert_eq!(
-            all_rows.len(), 3,
+            all_rows.len(),
+            3,
             "IS NOT NONE must include all 3 rows (both real and empty [])"
         );
 
@@ -1419,7 +1468,8 @@ mod schemaless_tests {
         // empty embeddings in VectorIndex::insert. Only 2 real rows end up in index.
         let index = VectorIndex::load_from_db(&db).await.unwrap();
         assert_eq!(
-            index.len(), 2,
+            index.len(),
+            2,
             "VectorIndex must contain only 2 real-embedding rows, got {}",
             index.len()
         );
@@ -1433,7 +1483,7 @@ mod schemaless_tests {
     /// lossless reinterpretation, not a numeric conversion.
     #[test]
     fn pack_unpack_roundtrip_exact() {
-        use crate::store::ops::{pack_embedding, de_embedding_dual};
+        use crate::store::ops::{de_embedding_dual, pack_embedding};
         use serde::de::value::{BytesDeserializer, Error as ValueError};
 
         let original = emb_1024(7.0);
@@ -1444,7 +1494,10 @@ mod schemaless_tests {
         // visit_bytes arm (BytesDeserializer drives visit_bytes).
         let de: BytesDeserializer<ValueError> = BytesDeserializer::new(&packed);
         let decoded = de_embedding_dual(de).expect("decode packed bytes");
-        assert_eq!(decoded, original, "decode(pack(v)) must equal v bit-exactly");
+        assert_eq!(
+            decoded, original,
+            "decode(pack(v)) must equal v bit-exactly"
+        );
     }
 
     /// IDEMPOTENCY (the contract): re-encoding an already-`bytes` row reproduces
@@ -1452,7 +1505,7 @@ mod schemaless_tests {
     /// resume or replay — a second pass over a converted row is a no-op in effect.
     #[test]
     fn reencode_already_bytes_is_byte_identical() {
-        use crate::store::ops::{pack_embedding, de_embedding_dual};
+        use crate::store::ops::{de_embedding_dual, pack_embedding};
         use serde::de::value::{BytesDeserializer, Error as ValueError};
 
         let original = emb_1024(3.5);
@@ -1474,7 +1527,7 @@ mod schemaless_tests {
     /// change (VectorIndex::insert skips zero-length vectors downstream).
     #[test]
     fn empty_embedding_roundtrips_empty() {
-        use crate::store::ops::{pack_embedding, de_embedding_dual};
+        use crate::store::ops::{de_embedding_dual, pack_embedding};
         use serde::de::value::{BytesDeserializer, Error as ValueError};
 
         let packed = pack_embedding(&[]);
@@ -1490,8 +1543,8 @@ mod schemaless_tests {
     /// search for the exact embedding returns score ≈ 1.0.
     #[tokio::test]
     async fn bytes_format_chunk_loads_and_searches() {
-        use crate::vector::VectorIndex;
         use crate::store::ops::pack_embedding;
+        use crate::vector::VectorIndex;
         use surrealdb::sql::Value;
 
         let home = TempDir::new().unwrap();
@@ -1507,9 +1560,13 @@ mod schemaless_tests {
         map.insert("line_start".into(), Value::from(1i64));
         map.insert("line_end".into(), Value::from(10i64));
         map.insert("content".into(), Value::from("x"));
-        map.insert("embedding".into(), Value::Bytes(surrealdb::sql::Bytes::from(packed)));
+        map.insert(
+            "embedding".into(),
+            Value::Bytes(surrealdb::sql::Bytes::from(packed)),
+        );
         map.insert("symbol_ref".into(), Value::None);
-        let data = surrealdb::sql::Array::from(vec![Value::Object(surrealdb::sql::Object::from(map))]);
+        let data =
+            surrealdb::sql::Array::from(vec![Value::Object(surrealdb::sql::Object::from(map))]);
         db.query("INSERT INTO chunk $data RETURN NONE")
             .bind(("data", data))
             .await
@@ -1517,12 +1574,20 @@ mod schemaless_tests {
 
         // Load via the production read path — exercises the visit_bytes arm.
         let index = VectorIndex::load_from_db(&db).await.unwrap();
-        assert_eq!(index.len(), 1, "bytes-format chunk must load into the index");
+        assert_eq!(
+            index.len(),
+            1,
+            "bytes-format chunk must load into the index"
+        );
 
         let results = index.search(&emb, 1);
         assert_eq!(results.len(), 1);
         let diff = (results[0].score - 1.0_f32).abs();
-        assert!(diff < 1e-4, "exact-embedding search must score ≈ 1.0, got {}", results[0].score);
+        assert!(
+            diff < 1e-4,
+            "exact-embedding search must score ≈ 1.0, got {}",
+            results[0].score
+        );
         assert_eq!(results[0].chunk_id.file, "/repo/bytes.rs");
     }
 
@@ -1532,8 +1597,8 @@ mod schemaless_tests {
     /// DB mid-migration returns correct results.
     #[tokio::test]
     async fn mixed_old_and_new_format_load_together() {
-        use crate::vector::VectorIndex;
         use crate::store::ops::pack_embedding;
+        use crate::vector::VectorIndex;
         use surrealdb::sql::Value;
 
         let home = TempDir::new().unwrap();
@@ -1542,12 +1607,18 @@ mod schemaless_tests {
 
         // Old-format row: array<float> via literal INSERT.
         let old_emb = emb_1024(1.0);
-        let old_str: String = old_emb.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+        let old_str: String = old_emb
+            .iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
         db.query(&format!(
             "INSERT INTO chunk {{ file: '/repo/old.rs', line_start: 1, line_end: 5, \
              content: 'old', embedding: [{}], symbol_ref: NONE }}",
             old_str
-        )).await.expect("insert old-format chunk");
+        ))
+        .await
+        .expect("insert old-format chunk");
 
         // New-format row: packed bytes.
         let new_emb = emb_1024(2.0);
@@ -1556,10 +1627,17 @@ mod schemaless_tests {
         map.insert("line_start".into(), Value::from(1i64));
         map.insert("line_end".into(), Value::from(5i64));
         map.insert("content".into(), Value::from("new"));
-        map.insert("embedding".into(), Value::Bytes(surrealdb::sql::Bytes::from(pack_embedding(&new_emb))));
+        map.insert(
+            "embedding".into(),
+            Value::Bytes(surrealdb::sql::Bytes::from(pack_embedding(&new_emb))),
+        );
         map.insert("symbol_ref".into(), Value::None);
-        let data = surrealdb::sql::Array::from(vec![Value::Object(surrealdb::sql::Object::from(map))]);
-        db.query("INSERT INTO chunk $data RETURN NONE").bind(("data", data)).await.expect("insert new-format chunk");
+        let data =
+            surrealdb::sql::Array::from(vec![Value::Object(surrealdb::sql::Object::from(map))]);
+        db.query("INSERT INTO chunk $data RETURN NONE")
+            .bind(("data", data))
+            .await
+            .expect("insert new-format chunk");
 
         // Both must load through the one dual-tolerant scan.
         let index = VectorIndex::load_from_db(&db).await.unwrap();
@@ -1587,17 +1665,27 @@ mod schemaless_tests {
         let seeds = [11.0_f32, 22.0, 33.0];
         for (i, s) in seeds.iter().enumerate() {
             let emb = emb_1024(*s);
-            let emb_str: String = emb.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+            let emb_str: String = emb
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
             db.query(&format!(
                 "INSERT INTO chunk {{ file: '/repo/m_{i}.rs', line_start: 1, line_end: 5, \
                  content: 'c', embedding: [{}], symbol_ref: NONE }}",
                 emb_str
-            )).await.expect("seed old-format chunk");
+            ))
+            .await
+            .expect("seed old-format chunk");
         }
 
         // Run the migration.
         run_migration_v4_to_v5(&db).await.expect("v4→v5");
-        assert_eq!(read_db_schema_version(&db).await, 5, "version must be 5 after migration");
+        assert_eq!(
+            read_db_schema_version(&db).await,
+            5,
+            "version must be 5 after migration"
+        );
 
         // All embeddings must still load and search exactly (now from bytes).
         let index = crate::vector::VectorIndex::load_from_db(&db).await.unwrap();
@@ -1605,18 +1693,28 @@ mod schemaless_tests {
         for s in seeds {
             let emb = emb_1024(s);
             let r = index.search(&emb, 1);
-            assert!((r[0].score - 1.0).abs() < 1e-4, "post-migration exact search must score ≈ 1.0");
+            assert!(
+                (r[0].score - 1.0).abs() < 1e-4,
+                "post-migration exact search must score ≈ 1.0"
+            );
         }
 
         // Idempotent: re-run completes, version stays 5, embeddings unchanged.
         run_migration_v4_to_v5(&db).await.expect("v4→v5 re-run");
-        assert_eq!(read_db_schema_version(&db).await, 5, "version stays 5 on re-run");
+        assert_eq!(
+            read_db_schema_version(&db).await,
+            5,
+            "version stays 5 on re-run"
+        );
         let index2 = crate::vector::VectorIndex::load_from_db(&db).await.unwrap();
         assert_eq!(index2.len(), 3, "re-run must not lose or duplicate rows");
         for s in seeds {
             let emb = emb_1024(s);
             let r = index2.search(&emb, 1);
-            assert!((r[0].score - 1.0).abs() < 1e-4, "embeddings bit-stable across re-run");
+            assert!(
+                (r[0].score - 1.0).abs() < 1e-4,
+                "embeddings bit-stable across re-run"
+            );
         }
     }
 
@@ -1632,12 +1730,18 @@ mod schemaless_tests {
         // Seed old-format rows.
         for i in 0..5_usize {
             let emb = emb_1024(i as f32 + 1.0);
-            let emb_str: String = emb.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+            let emb_str: String = emb
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
             db.query(&format!(
                 "INSERT INTO chunk {{ file: '/repo/r_{i}.rs', line_start: 1, line_end: 5, \
                  content: 'c', embedding: [{}], symbol_ref: NONE }}",
                 emb_str
-            )).await.expect("seed");
+            ))
+            .await
+            .expect("seed");
         }
 
         // Run once to convert everything and reach version 5.
@@ -1648,13 +1752,21 @@ mod schemaless_tests {
         // version to 4 and re-run. Because every row is already bytes, the re-run
         // re-encodes them idempotently and re-stamps 5 — proving resume safety
         // even when the cursor key is absent (fresh scan from "").
-        let _ = db.query("DELETE FROM index_meta WHERE key = $k")
-            .bind(("k", DB_SCHEMA_VERSION_KEY)).await;
-        ops::set_meta(&db, DB_SCHEMA_VERSION_KEY, "4").await.unwrap();
+        let _ = db
+            .query("DELETE FROM index_meta WHERE key = $k")
+            .bind(("k", DB_SCHEMA_VERSION_KEY))
+            .await;
+        ops::set_meta(&db, DB_SCHEMA_VERSION_KEY, "4")
+            .await
+            .unwrap();
         assert_eq!(read_db_schema_version(&db).await, 4);
 
         run_migration_v4_to_v5(&db).await.expect("resume run");
-        assert_eq!(read_db_schema_version(&db).await, 5, "resume must complete to version 5");
+        assert_eq!(
+            read_db_schema_version(&db).await,
+            5,
+            "resume must complete to version 5"
+        );
 
         let index = crate::vector::VectorIndex::load_from_db(&db).await.unwrap();
         assert_eq!(index.len(), 5, "all rows intact after resume");

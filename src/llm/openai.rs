@@ -42,9 +42,20 @@ struct ResponseFormat {
 #[derive(Serialize)]
 #[serde(untagged)]
 enum Message {
-    Standard { role: String, content: String },
-    Assistant { role: String, content: Option<String>, tool_calls: Vec<ToolCallMessage> },
-    ToolResult { role: String, tool_call_id: String, content: String },
+    Standard {
+        role: String,
+        content: String,
+    },
+    Assistant {
+        role: String,
+        content: Option<String>,
+        tool_calls: Vec<ToolCallMessage>,
+    },
+    ToolResult {
+        role: String,
+        tool_call_id: String,
+        content: String,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -150,14 +161,20 @@ fn log_cache_metrics(usage: &Option<Usage>) {
     if let Some(u) = usage {
         let prompt = u.prompt_tokens.unwrap_or(0);
         let completion = u.completion_tokens.unwrap_or(0);
-        let cached = u.prompt_tokens_details.as_ref()
+        let cached = u
+            .prompt_tokens_details
+            .as_ref()
             .and_then(|d| d.cached_tokens)
             .unwrap_or(0);
         info!(
             prompt_tokens = prompt,
             completion_tokens = completion,
             cached_tokens = cached,
-            cache_hit_pct = if prompt > 0 { (cached as f64 / prompt as f64 * 100.0) as u32 } else { 0 },
+            cache_hit_pct = if prompt > 0 {
+                (cached as f64 / prompt as f64 * 100.0) as u32
+            } else {
+                0
+            },
             "openai cache metrics"
         );
     }
@@ -194,16 +211,26 @@ pub async fn complete(
     let body = ChatRequest {
         model: model.to_owned(),
         messages: vec![
-            Message::Standard { role: "system".to_owned(), content: system_owned },
-            Message::Standard { role: "user".to_owned(), content: user.to_owned() },
+            Message::Standard {
+                role: "system".to_owned(),
+                content: system_owned,
+            },
+            Message::Standard {
+                role: "user".to_owned(),
+                content: user.to_owned(),
+            },
         ],
         temperature,
         stream: false,
-        response_format: structured.then(|| ResponseFormat { kind: "json_object".to_owned() }),
+        response_format: structured.then(|| ResponseFormat {
+            kind: "json_object".to_owned(),
+        }),
         tools: None,
         tool_choice: None,
         prompt_cache_key: None,
-        reasoning: Some(Reasoning { effort: "low".to_owned() }),
+        reasoning: Some(Reasoning {
+            effort: "low".to_owned(),
+        }),
     };
 
     info!(
@@ -236,7 +263,10 @@ pub async fn complete(
     };
 
     let status = resp.status();
-    let text = resp.text().await.context("failed to read OpenAI response body")?;
+    let text = resp
+        .text()
+        .await
+        .context("failed to read OpenAI response body")?;
 
     if !status.is_success() {
         tracing::error!(
@@ -249,8 +279,8 @@ pub async fn complete(
         bail!("OpenAI API returned HTTP {status}: {text}");
     }
 
-    let parsed: ChatResponse = serde_json::from_str(&text)
-        .context("failed to parse OpenAI response JSON")?;
+    let parsed: ChatResponse =
+        serde_json::from_str(&text).context("failed to parse OpenAI response JSON")?;
 
     if let Some(err) = parsed.error {
         bail!("OpenAI API error: {}", err.message);
@@ -258,7 +288,8 @@ pub async fn complete(
 
     log_cache_metrics(&parsed.usage);
 
-    let result_text = parsed.choices
+    let result_text = parsed
+        .choices
         .and_then(|c| c.into_iter().next())
         .and_then(|c| c.message.content)
         .unwrap_or_default();
@@ -292,22 +323,31 @@ pub async fn complete_with_tools(
     let url = chat_url(base_url);
 
     let mut messages: Vec<Message> = Vec::with_capacity(contents.len() + 1);
-    messages.push(Message::Standard { role: "system".to_owned(), content: system.to_owned() });
+    messages.push(Message::Standard {
+        role: "system".to_owned(),
+        content: system.to_owned(),
+    });
 
     for msg in contents {
         match msg {
             super::ChatMessage::User(text) => {
-                messages.push(Message::Standard { role: "user".to_owned(), content: text.clone() });
+                messages.push(Message::Standard {
+                    role: "user".to_owned(),
+                    content: text.clone(),
+                });
             }
             super::ChatMessage::ModelToolCalls(calls) => {
-                let tool_calls: Vec<ToolCallMessage> = calls.iter().map(|c| ToolCallMessage {
-                    id: c.id.clone().unwrap_or_default(),
-                    kind: "function".to_owned(),
-                    function: ToolCallFunction {
-                        name: c.name.clone(),
-                        arguments: c.args.to_string(),
-                    },
-                }).collect();
+                let tool_calls: Vec<ToolCallMessage> = calls
+                    .iter()
+                    .map(|c| ToolCallMessage {
+                        id: c.id.clone().unwrap_or_default(),
+                        kind: "function".to_owned(),
+                        function: ToolCallFunction {
+                            name: c.name.clone(),
+                            arguments: c.args.to_string(),
+                        },
+                    })
+                    .collect();
                 messages.push(Message::Assistant {
                     role: "assistant".to_owned(),
                     content: None,
@@ -326,14 +366,17 @@ pub async fn complete_with_tools(
         }
     }
 
-    let openai_tools: Vec<OpenAITool> = tools.iter().map(|t| OpenAITool {
-        kind: "function".to_owned(),
-        function: OpenAIFunction {
-            name: t.name.clone(),
-            description: t.description.clone(),
-            parameters: t.parameters.clone(),
-        },
-    }).collect();
+    let openai_tools: Vec<OpenAITool> = tools
+        .iter()
+        .map(|t| OpenAITool {
+            kind: "function".to_owned(),
+            function: OpenAIFunction {
+                name: t.name.clone(),
+                description: t.description.clone(),
+                parameters: t.parameters.clone(),
+            },
+        })
+        .collect();
 
     let body = ChatRequest {
         model: model.to_owned(),
@@ -344,12 +387,18 @@ pub async fn complete_with_tools(
         tools: Some(openai_tools),
         tool_choice: if force_tool_use {
             let is_custom = base_url.is_some_and(|u| !u.trim().is_empty());
-            Some(if !is_custom || force_tool_use_on_custom { "required".to_owned() } else { "auto".to_owned() })
+            Some(if !is_custom || force_tool_use_on_custom {
+                "required".to_owned()
+            } else {
+                "auto".to_owned()
+            })
         } else {
             None
         },
         prompt_cache_key: prompt_cache_key.map(|s| s.to_owned()),
-        reasoning: Some(Reasoning { effort: "low".to_owned() }),
+        reasoning: Some(Reasoning {
+            effort: "low".to_owned(),
+        }),
     };
 
     let request_json = serde_json::to_string(&body).unwrap_or_default();
@@ -385,7 +434,10 @@ pub async fn complete_with_tools(
     };
 
     let status = resp.status();
-    let text = resp.text().await.context("failed to read OpenAI response body")?;
+    let text = resp
+        .text()
+        .await
+        .context("failed to read OpenAI response body")?;
 
     if !status.is_success() {
         tracing::error!(
@@ -418,8 +470,7 @@ pub async fn complete_with_tools(
 
     log_cache_metrics(&parsed.usage);
 
-    let choice = parsed.choices
-        .and_then(|c| c.into_iter().next());
+    let choice = parsed.choices.and_then(|c| c.into_iter().next());
 
     match choice {
         Some(c) => {
@@ -453,7 +504,10 @@ mod tests {
     #[test]
     fn token_absent_appends_directive() {
         let s = ensure_json_token(true, "You are a ranker.", "rank these chunks");
-        assert!(s.to_lowercase().contains("json"), "must inject the json token");
+        assert!(
+            s.to_lowercase().contains("json"),
+            "must inject the json token"
+        );
     }
 
     #[test]
@@ -502,7 +556,14 @@ mod tests {
         let json = r#"{"choices": [{"message": {"content": "ok"}}]}"#;
         let resp: ChatResponse = serde_json::from_str(json).expect("parse");
         assert!(resp.usage.is_none());
-        let text = resp.choices.unwrap().into_iter().next().unwrap().message.content;
+        let text = resp
+            .choices
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .message
+            .content;
         assert_eq!(text.as_deref(), Some("ok"));
     }
 
@@ -520,7 +581,10 @@ mod tests {
             reasoning: None,
         };
         let json = serde_json::to_value(&body).expect("serialize");
-        assert_eq!(json.get("prompt_cache_key").and_then(|v| v.as_str()), Some("test-key-123"));
+        assert_eq!(
+            json.get("prompt_cache_key").and_then(|v| v.as_str()),
+            Some("test-key-123")
+        );
     }
 
     #[test]

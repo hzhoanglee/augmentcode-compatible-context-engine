@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -8,7 +8,10 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use surrealdb::Surreal;
 use surrealdb::engine::local::Db;
-use surrealdb::sql::{Array as SqlArray, Bytes as SqlBytes, Id as SqlId, Object as SqlObject, Thing as SqlThing, Value as SqlValue};
+use surrealdb::sql::{
+    Array as SqlArray, Bytes as SqlBytes, Id as SqlId, Object as SqlObject, Thing as SqlThing,
+    Value as SqlValue,
+};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -24,8 +27,8 @@ use crate::parsing::parse_file;
 use crate::parsing::relations::{EdgeKind, EdgeTarget};
 use crate::parsing::symbols::Symbol;
 use crate::store::ops::{
-    FileMeta, delete_all_data, delete_files_data_bulk, get_all_file_meta,
-    get_meta, set_meta, upsert_file_meta, find_symbols_by_names_with_pos, SymbolWithPos,
+    FileMeta, SymbolWithPos, delete_all_data, delete_files_data_bulk,
+    find_symbols_by_names_with_pos, get_all_file_meta, get_meta, set_meta, upsert_file_meta,
 };
 use crate::vector::{ChunkId, ShardedVectorIndex};
 
@@ -217,7 +220,8 @@ async fn resolve_raw_edge_page(
     }
     for bucket in name_bucket.values_mut() {
         bucket.sort_unstable_by(|a, b| {
-            a.file.cmp(&b.file)
+            a.file
+                .cmp(&b.file)
                 .then(a.line_start.cmp(&b.line_start))
                 .then(a.line_end.cmp(&b.line_end))
         });
@@ -225,13 +229,12 @@ async fn resolve_raw_edge_page(
 
     for row in batch {
         let resolved_to = match name_bucket.get(&row.to_name) {
-            Some(candidates) if !candidates.is_empty() => {
-                IndexPipeline::select_best_candidate(
-                    candidates,
-                    &row.from_file,
-                    row.import_path.as_deref(),
-                ).cloned()
-            }
+            Some(candidates) if !candidates.is_empty() => IndexPipeline::select_best_candidate(
+                candidates,
+                &row.from_file,
+                row.import_path.as_deref(),
+            )
+            .cloned(),
             _ => {
                 debug!(name = %row.to_name, "{}: dropping unresolved raw edge", label);
                 None
@@ -282,9 +285,22 @@ impl IndexPipeline {
         Self::new_with_concurrency(repo, voyage, 4, None)
     }
 
-    pub fn new_with_concurrency(repo: String, voyage: Option<VoyageClient>, embed_concurrency: usize, cache: Option<EmbeddingCache>) -> Self {
+    pub fn new_with_concurrency(
+        repo: String,
+        voyage: Option<VoyageClient>,
+        embed_concurrency: usize,
+        cache: Option<EmbeddingCache>,
+    ) -> Self {
         let embed_concurrency = embed_concurrency.max(1);
-        Self { repo, voyage, embed_concurrency, cache: cache.map(Arc::new), extra_extensions: vec![], ignore_filenames: HashSet::new(), ignore_paths: HashSet::new() }
+        Self {
+            repo,
+            voyage,
+            embed_concurrency,
+            cache: cache.map(Arc::new),
+            extra_extensions: vec![],
+            ignore_filenames: HashSet::new(),
+            ignore_paths: HashSet::new(),
+        }
     }
 
     pub fn with_extra_extensions(mut self, extra: Vec<String>) -> Self {
@@ -331,9 +347,11 @@ impl IndexPipeline {
             let ext_clone = self.extra_extensions.clone();
             let ign_clone = self.ignore_filenames.clone();
             let ign_paths_clone = self.ignore_paths.clone();
-            let total_files = tokio::task::spawn_blocking(move || walk_repo_with(&repo_clone, &ext_clone, &ign_clone, &ign_paths_clone).len() as u64)
-                .await
-                .unwrap_or(0);
+            let total_files = tokio::task::spawn_blocking(move || {
+                walk_repo_with(&repo_clone, &ext_clone, &ign_clone, &ign_paths_clone).len() as u64
+            })
+            .await
+            .unwrap_or(0);
             if let Some(bus) = event_bus {
                 bus.emit(IndexEvent::Started {
                     repo: self.repo.clone(),
@@ -341,7 +359,15 @@ impl IndexPipeline {
                     is_rebuild: force_rebuild,
                 });
             }
-            let (new_vectors, stage_stats) = self.full_rebuild(db, progress.as_ref(), event_bus, key_hints, cancel_token.as_ref()).await?;
+            let (new_vectors, stage_stats) = self
+                .full_rebuild(
+                    db,
+                    progress.as_ref(),
+                    event_bus,
+                    key_hints,
+                    cancel_token.as_ref(),
+                )
+                .await?;
             if let Some(vi) = vector_index {
                 let mut guard = vi.write().await;
                 // Empty active set: the cap may evict LRU shards to honor the
@@ -413,7 +439,8 @@ impl IndexPipeline {
                     .map(|m| (m.path.clone(), (m.mtime, m.size)))
                     .collect();
                 tokio::task::spawn_blocking(move || {
-                    let all_files = walk_repo_with(&repo_clone, &ext_clone, &ign_clone, &ign_paths_clone);
+                    let all_files =
+                        walk_repo_with(&repo_clone, &ext_clone, &ign_clone, &ign_paths_clone);
                     crate::indexing::tracker::detect_changes(&all_files, &meta_map)
                 })
                 .await
@@ -423,7 +450,13 @@ impl IndexPipeline {
 
         // Filter out Added/Modified changes whose paths are inside dot-prefixed directories.
         // Deleted changes are allowed through to clean up any previously indexed dot-dir entries.
-        let file_changes = filter_hidden_changes_with(std::path::Path::new(&self.repo), file_changes, self.extra_extensions.clone(), self.ignore_filenames.clone(), self.ignore_paths.clone());
+        let file_changes = filter_hidden_changes_with(
+            std::path::Path::new(&self.repo),
+            file_changes,
+            self.extra_extensions.clone(),
+            self.ignore_filenames.clone(),
+            self.ignore_paths.clone(),
+        );
 
         if file_changes.is_empty() {
             debug!(repo = %self.repo, "no changes detected");
@@ -438,7 +471,9 @@ impl IndexPipeline {
                 // there), so we must force a full rebuild.
                 use serde::Deserialize;
                 #[derive(Deserialize)]
-                struct CountRow { count: i64 }
+                struct CountRow {
+                    count: i64,
+                }
                 let raw_edge_count: Vec<CountRow> = db
                     .query("SELECT count() AS count FROM raw_edge GROUP ALL")
                     .await
@@ -454,7 +489,9 @@ impl IndexPipeline {
                         "RAM-path crash detected (edges_resolved absent, raw_edge empty, file_meta present) \
                          — forcing full rebuild to recover calls edges"
                     );
-                    let (new_vectors, stage_stats) = self.full_rebuild(db, None, event_bus, key_hints, cancel_token.as_ref()).await?;
+                    let (new_vectors, stage_stats) = self
+                        .full_rebuild(db, None, event_bus, key_hints, cancel_token.as_ref())
+                        .await?;
                     if let Some(vi) = vector_index {
                         let mut guard = vi.write().await;
                         guard.replace_repo(&self.repo, &new_vectors, &[]);
@@ -470,13 +507,18 @@ impl IndexPipeline {
                 } else {
                     // Normal Phase 2 replay: raw_edges are in DB (overflow path or incremental).
                     info!(repo = %self.repo, raw_edge_total, "edges_resolved marker absent — replaying Phase 2 from DB");
-                    self.resolve_edges_phase2(db).await
+                    self.resolve_edges_phase2(db)
+                        .await
                         .context("edges Phase 2 replay on no-change run")?;
                 }
             }
             let indexed = stored_meta.len() as u64;
             let total_files = stored_meta.len() as u64;
-            return Ok(IndexPipelineStats { indexed_files: indexed, total_files, ..Default::default() });
+            return Ok(IndexPipelineStats {
+                indexed_files: indexed,
+                total_files,
+                ..Default::default()
+            });
         }
 
         // For watcher-path (changes == Some), total_files comes from stored_meta (no walk).
@@ -487,11 +529,23 @@ impl IndexPipeline {
         if let Some(bus) = event_bus {
             bus.emit(IndexEvent::Started {
                 repo: self.repo.clone(),
-                total_files: file_changes.iter().filter(|c| c.kind != ChangeKind::Deleted).count() as u64,
+                total_files: file_changes
+                    .iter()
+                    .filter(|c| c.kind != ChangeKind::Deleted)
+                    .count() as u64,
                 is_rebuild: false,
             });
         }
-        let (removed_files, new_vectors) = self.incremental_run(db, file_changes, progress.as_ref(), event_bus, key_hints, cancel_token.as_ref()).await?;
+        let (removed_files, new_vectors) = self
+            .incremental_run(
+                db,
+                file_changes,
+                progress.as_ref(),
+                event_bus,
+                key_hints,
+                cancel_token.as_ref(),
+            )
+            .await?;
 
         if let Some(vi) = vector_index {
             let mut guard = vi.write().await;
@@ -501,7 +555,11 @@ impl IndexPipeline {
         }
 
         let indexed = get_all_file_meta(db, &self.repo).await?.len() as u64;
-        Ok(IndexPipelineStats { indexed_files: indexed, total_files, ..Default::default() })
+        Ok(IndexPipelineStats {
+            indexed_files: indexed,
+            total_files,
+            ..Default::default()
+        })
     }
 
     // ─── Full rebuild ─────────────────────────────────────────────────────
@@ -514,15 +572,23 @@ impl IndexPipeline {
         key_hints: &[String],
         cancel_token: Option<&CancellationToken>,
     ) -> Result<(Vec<(ChunkId, Vec<f32>)>, IndexPipelineStats)> {
-        let all_files = walk_repo_with(&self.repo, &self.extra_extensions, &self.ignore_filenames, &self.ignore_paths);
+        let all_files = walk_repo_with(
+            &self.repo,
+            &self.extra_extensions,
+            &self.ignore_filenames,
+            &self.ignore_paths,
+        );
         info!(repo = %self.repo, file_count = all_files.len(), "walking repo for full rebuild");
 
         // Delete everything first (crash-safe: file_meta is the commit marker,
         // written per-file only after its chunks are durable).
-        delete_all_data(db).await.context("full_rebuild: delete_all_data")?;
+        delete_all_data(db)
+            .await
+            .context("full_rebuild: delete_all_data")?;
 
         // Also clear the edges_resolved marker so Phase 2 re-runs after build.
-        let _ = db.query("DELETE FROM index_meta WHERE key = $k")
+        let _ = db
+            .query("DELETE FROM index_meta WHERE key = $k")
             .bind(("k", EDGES_RESOLVED_KEY))
             .await;
 
@@ -532,13 +598,23 @@ impl IndexPipeline {
         // If the repo exceeds MAX_RAM_EDGES, edges overflow to the DB and Phase 2
         // falls back to the keyset scan path (same as before).
         let (chunk_vectors, mut stats, ram_raw_edges, ram_edges_overflowed) = self
-            .streaming_index(&all_files, db, progress, event_bus, key_hints, true, cancel_token)
+            .streaming_index(
+                &all_files,
+                db,
+                progress,
+                event_bus,
+                key_hints,
+                true,
+                cancel_token,
+            )
             .await
             .context("full_rebuild: streaming_index")?;
 
         // Phase 2: resolve raw edges into denormalized calls rows.
         if let Some(bus) = event_bus {
-            bus.emit(IndexEvent::Phase2Start { repo: self.repo.clone() });
+            bus.emit(IndexEvent::Phase2Start {
+                repo: self.repo.clone(),
+            });
         }
         let phase2_start = Instant::now();
         if !ram_edges_overflowed && !ram_raw_edges.is_empty() {
@@ -586,11 +662,8 @@ impl IndexPipeline {
             .map(|c| c.path.clone())
             .collect();
 
-        let all_affected: Vec<String> = to_delete
-            .iter()
-            .chain(to_process.iter())
-            .cloned()
-            .collect();
+        let all_affected: Vec<String> =
+            to_delete.iter().chain(to_process.iter()).cloned().collect();
 
         // Pre-compute: unchanged callers currently pointing INTO the affected files.
         // These calls rows will be destroyed by delete_files_data_bulk below, so
@@ -598,7 +671,9 @@ impl IndexPipeline {
         // "removal direction" (Scenario A: target removes symbol, caller must re-resolve).
         use serde::Deserialize;
         #[derive(Deserialize)]
-        struct PreDeleteCallerRow { in_file: String }
+        struct PreDeleteCallerRow {
+            in_file: String,
+        }
         let pre_delete_caller_rows: Vec<PreDeleteCallerRow> = db
             .query(
                 "SELECT in_file FROM calls \
@@ -622,23 +697,31 @@ impl IndexPipeline {
         // Stream parse → embed → write.
         // Raw edges go to DB (crash-safe incremental path).
         let (chunk_vectors, _stage_stats, _ram_edges, _overflowed) = self
-            .streaming_index(&to_process, db, progress, event_bus, key_hints, false, cancel_token)
+            .streaming_index(
+                &to_process,
+                db,
+                progress,
+                event_bus,
+                key_hints,
+                false,
+                cancel_token,
+            )
             .await
             .context("incremental_run: streaming_index")?;
 
         // Delete file_meta for deleted files.
         for file in &to_delete {
             let escaped = escape_surreal(file);
-            db.query(format!(
-                "DELETE FROM file_meta WHERE path = '{escaped}'"
-            ))
-            .await
-            .context("incremental_run: delete file_meta for deleted file")?;
+            db.query(format!("DELETE FROM file_meta WHERE path = '{escaped}'"))
+                .await
+                .context("incremental_run: delete file_meta for deleted file")?;
         }
 
         // Phase 2: resolve only edges touching the changed files — O(changed + callers_of_changed).
         if let Some(bus) = event_bus {
-            bus.emit(IndexEvent::Phase2Start { repo: self.repo.clone() });
+            bus.emit(IndexEvent::Phase2Start {
+                repo: self.repo.clone(),
+            });
         }
         let phase2_start = Instant::now();
         self.resolve_edges_incremental(db, &all_affected, &pre_delete_callers)
@@ -676,7 +759,12 @@ impl IndexPipeline {
         key_hints: &[String],
         is_full_rebuild: bool,
         cancel_token: Option<&CancellationToken>,
-    ) -> Result<(Vec<(ChunkId, Vec<f32>)>, IndexPipelineStats, Vec<RawEdgeRecord>, bool)> {
+    ) -> Result<(
+        Vec<(ChunkId, Vec<f32>)>,
+        IndexPipelineStats,
+        Vec<RawEdgeRecord>,
+        bool,
+    )> {
         if files.is_empty() {
             if let Some(ph) = progress {
                 ph.set_run_total(0).await;
@@ -815,7 +903,12 @@ impl IndexPipeline {
                                     let key_hint = hints_ref.first().cloned().unwrap_or_default();
                                     let embed_start = Instant::now();
 
-                                    let embed_result = embed_parsed_file(&pf, voyage_ref.as_ref(), cache_ref.clone()).await;
+                                    let embed_result = embed_parsed_file(
+                                        &pf,
+                                        voyage_ref.as_ref(),
+                                        cache_ref.clone(),
+                                    )
+                                    .await;
 
                                     let embed_elapsed_ms = embed_start.elapsed().as_millis() as u64;
 
@@ -1004,7 +1097,10 @@ impl IndexPipeline {
             total_chunks_count += ef.chunks.len() as u64;
 
             for (chunk, emb) in ef.chunks.iter().zip(
-                ef.embeddings.iter().cloned().chain(std::iter::repeat(vec![]))
+                ef.embeddings
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::repeat(vec![])),
             ) {
                 // (a) CPU: construct ChunkRecord and push to vector index accumulator.
                 let t_cpu = Instant::now();
@@ -1027,7 +1123,10 @@ impl IndexPipeline {
                     line_end: chunk.line_end as i64,
                     content: chunk.content.clone(),
                     embedding: packed,
-                    symbol_ref: chunk.symbol_ref.as_ref().map(|fqn| format!("symbol:⟨{fqn}⟩")),
+                    symbol_ref: chunk
+                        .symbol_ref
+                        .as_ref()
+                        .map(|fqn| format!("symbol:⟨{fqn}⟩")),
                 });
                 chunk_cpu_ns += t_cpu.elapsed().as_nanos() as u64;
 
@@ -1080,7 +1179,11 @@ impl IndexPipeline {
                 ph.set_processed(done).await;
             }
             if let Some(bus) = event_bus {
-                let status = if ef.embed_failed { "no_embeddings" } else { "ok" };
+                let status = if ef.embed_failed {
+                    "no_embeddings"
+                } else {
+                    "ok"
+                };
                 bus.emit(IndexEvent::FileIndexed {
                     file: ef.path.clone(),
                     indexed: done,
@@ -1174,7 +1277,12 @@ impl IndexPipeline {
             stage3_chunk_idx_rebuild_ms: 0,
         };
 
-        Ok((all_chunk_vectors, stats, ram_raw_edges, ram_edges_overflowed))
+        Ok((
+            all_chunk_vectors,
+            stats,
+            ram_raw_edges,
+            ram_edges_overflowed,
+        ))
     }
 
     // ─── Phase 2: batched edge resolution ────────────────────────────────
@@ -1198,8 +1306,8 @@ impl IndexPipeline {
         import_path: Option<&str>,
     ) -> Option<&'a SymbolWithPos> {
         use crate::indexing::import_resolver::resolve_import_path;
-        use crate::parsing::{Lang, detect_language};
         use crate::parsing::generated::is_generated_file;
+        use crate::parsing::{Lang, detect_language};
 
         if candidates.is_empty() {
             return None;
@@ -1207,18 +1315,19 @@ impl IndexPipeline {
 
         // Helper: within a level, prefer non-generated files. Falls back to
         // generated candidates only if no hand-written match exists at that level.
-        let prefer_non_generated = |iter: &mut dyn Iterator<Item = &'a SymbolWithPos>| -> Option<&'a SymbolWithPos> {
-            let mut generated_fallback: Option<&'a SymbolWithPos> = None;
-            for c in iter {
-                if !is_generated_file(&c.file) {
-                    return Some(c);
+        let prefer_non_generated =
+            |iter: &mut dyn Iterator<Item = &'a SymbolWithPos>| -> Option<&'a SymbolWithPos> {
+                let mut generated_fallback: Option<&'a SymbolWithPos> = None;
+                for c in iter {
+                    if !is_generated_file(&c.file) {
+                        return Some(c);
+                    }
+                    if generated_fallback.is_none() {
+                        generated_fallback = Some(c);
+                    }
                 }
-                if generated_fallback.is_none() {
-                    generated_fallback = Some(c);
-                }
-            }
-            generated_fallback
-        };
+                generated_fallback
+            };
 
         // Level 0: Full import path resolution — highest priority.
         // Attempt to resolve import_path to a concrete file via language-aware probing,
@@ -1231,7 +1340,7 @@ impl IndexPipeline {
                 if let Some(resolved_file) = resolve_import_path(imp, from_file, lang, &file_set) {
                     // Find the first candidate in the resolved file.
                     let result = prefer_non_generated(
-                        &mut candidates.iter().filter(|c| c.file == resolved_file)
+                        &mut candidates.iter().filter(|c| c.file == resolved_file),
                     );
                     if result.is_some() {
                         return result;
@@ -1241,10 +1350,13 @@ impl IndexPipeline {
                     // resolving (all candidates share the same leaf name).
                     let target_symbol = &candidates[0].name;
                     if let Some(reexport_file) = crate::indexing::import_resolver::chase_reexports(
-                        &resolved_file, target_symbol, &file_set, 0,
+                        &resolved_file,
+                        target_symbol,
+                        &file_set,
+                        0,
                     ) {
                         let result = prefer_non_generated(
-                            &mut candidates.iter().filter(|c| c.file == reexport_file)
+                            &mut candidates.iter().filter(|c| c.file == reexport_file),
                         );
                         if result.is_some() {
                             return result;
@@ -1258,9 +1370,8 @@ impl IndexPipeline {
         if let Some(imp) = import_path {
             if imp.contains('/') {
                 // Level 1: path ends_with import_path (handles subdirectory imports).
-                let result = prefer_non_generated(
-                    &mut candidates.iter().filter(|c| c.file.ends_with(imp))
-                );
+                let result =
+                    prefer_non_generated(&mut candidates.iter().filter(|c| c.file.ends_with(imp)));
                 if result.is_some() {
                     return result;
                 }
@@ -1270,15 +1381,13 @@ impl IndexPipeline {
                     .parent()
                     .and_then(|p| p.to_str())
                     .unwrap_or("");
-                let result = prefer_non_generated(
-                    &mut candidates.iter().filter(|c| {
-                        std::path::Path::new(&c.file)
-                            .parent()
-                            .and_then(|p| p.to_str())
-                            .map(|d| d == from_dir)
-                            .unwrap_or(false)
-                    })
-                );
+                let result = prefer_non_generated(&mut candidates.iter().filter(|c| {
+                    std::path::Path::new(&c.file)
+                        .parent()
+                        .and_then(|p| p.to_str())
+                        .map(|d| d == from_dir)
+                        .unwrap_or(false)
+                }));
                 if result.is_some() {
                     return result;
                 }
@@ -1357,14 +1466,19 @@ impl IndexPipeline {
         use serde::Deserialize;
 
         // First delete all existing calls edges (we're rewriting them from raw_edge).
-        db.query("DELETE FROM calls").await.context("phase2: delete calls")?;
+        db.query("DELETE FROM calls")
+            .await
+            .context("phase2: delete calls")?;
 
         // Count total raw edges first to know if there's work to do.
         #[derive(Deserialize)]
-        struct CountRow { count: i64 }
+        struct CountRow {
+            count: i64,
+        }
         let count_rows: Vec<CountRow> = db
             .query("SELECT count() AS count FROM raw_edge GROUP ALL")
-            .await.context("phase2: count raw_edge")?
+            .await
+            .context("phase2: count raw_edge")?
             .take(0)?;
         let total = count_rows.first().map(|r| r.count).unwrap_or(0);
         info!(repo = %self.repo, total_raw_edges = total, "phase2: starting edge resolution");
@@ -1380,7 +1494,9 @@ impl IndexPipeline {
         // This avoids per-page round-trips to the DB for symbol resolution.
         // Memory: 27K symbols × ~120 bytes = ~3.3 MB — bounded and safe.
         let t_sym_load = Instant::now();
-        let all_symbols = load_all_symbols(db).await.context("phase2: load all symbols")?;
+        let all_symbols = load_all_symbols(db)
+            .await
+            .context("phase2: load all symbols")?;
         let sym_load_ms = t_sym_load.elapsed().as_millis();
         info!(repo = %self.repo, symbol_count = all_symbols.len(), sym_load_ms, "phase2: loaded all symbols");
 
@@ -1392,7 +1508,8 @@ impl IndexPipeline {
         // Pre-sort each bucket for deterministic tie-breaking (file, line_start, line_end).
         for bucket in name_bucket.values_mut() {
             bucket.sort_unstable_by(|a, b| {
-                a.file.cmp(&b.file)
+                a.file
+                    .cmp(&b.file)
                     .then(a.line_start.cmp(&b.line_start))
                     .then(a.line_end.cmp(&b.line_end))
             });
@@ -1407,8 +1524,10 @@ impl IndexPipeline {
             "REMOVE INDEX IF EXISTS idx_calls_in_file  ON calls; \
              REMOVE INDEX IF EXISTS idx_calls_out_file ON calls; \
              REMOVE INDEX IF EXISTS idx_calls_in_name  ON calls; \
-             REMOVE INDEX IF EXISTS idx_calls_out_name ON calls;"
-        ).await.context("phase2: drop calls indexes")?;
+             REMOVE INDEX IF EXISTS idx_calls_out_name ON calls;",
+        )
+        .await
+        .context("phase2: drop calls indexes")?;
         info!(repo = %self.repo, idx_drop_ms = t_idx_drop.elapsed().as_millis() as u64, "phase2: dropped calls indexes");
 
         // Stream raw_edge in O(N) passes via file-keyset pagination.
@@ -1446,7 +1565,9 @@ impl IndexPipeline {
         loop {
             // Outer: get next batch of distinct from_file values after the cursor.
             #[derive(Deserialize)]
-            struct FileRow { from_file: String }
+            struct FileRow {
+                from_file: String,
+            }
             let t_outer = Instant::now();
             let file_batch: Vec<FileRow> = db
                 .query(
@@ -1544,8 +1665,10 @@ impl IndexPipeline {
             "DEFINE INDEX IF NOT EXISTS idx_calls_in_file  ON calls FIELDS in_file; \
              DEFINE INDEX IF NOT EXISTS idx_calls_out_file ON calls FIELDS out_file; \
              DEFINE INDEX IF NOT EXISTS idx_calls_in_name  ON calls FIELDS in_name; \
-             DEFINE INDEX IF NOT EXISTS idx_calls_out_name ON calls FIELDS out_name;"
-        ).await.context("phase2: rebuild calls indexes")?;
+             DEFINE INDEX IF NOT EXISTS idx_calls_out_name ON calls FIELDS out_name;",
+        )
+        .await
+        .context("phase2: rebuild calls indexes")?;
         let idx_rebuild_ms = t_idx_rebuild.elapsed().as_millis() as u64;
         info!(repo = %self.repo, idx_rebuild_ms, "phase2: rebuilt calls indexes synchronously");
 
@@ -1599,7 +1722,9 @@ impl IndexPipeline {
 
         // Load ALL symbols into memory at once — same as the DB-scan Phase 2 path.
         let t_sym_load = Instant::now();
-        let all_symbols = load_all_symbols(db).await.context("phase2(ram): load all symbols")?;
+        let all_symbols = load_all_symbols(db)
+            .await
+            .context("phase2(ram): load all symbols")?;
         let sym_load_ms = t_sym_load.elapsed().as_millis();
         info!(repo = %self.repo, symbol_count = all_symbols.len(), sym_load_ms, "phase2(ram): loaded all symbols");
 
@@ -1610,7 +1735,8 @@ impl IndexPipeline {
         }
         for bucket in name_bucket.values_mut() {
             bucket.sort_unstable_by(|a, b| {
-                a.file.cmp(&b.file)
+                a.file
+                    .cmp(&b.file)
                     .then(a.line_start.cmp(&b.line_start))
                     .then(a.line_end.cmp(&b.line_end))
             });
@@ -1622,8 +1748,10 @@ impl IndexPipeline {
             "REMOVE INDEX IF EXISTS idx_calls_in_file  ON calls; \
              REMOVE INDEX IF EXISTS idx_calls_out_file ON calls; \
              REMOVE INDEX IF EXISTS idx_calls_in_name  ON calls; \
-             REMOVE INDEX IF EXISTS idx_calls_out_name ON calls;"
-        ).await.context("phase2(ram): drop calls indexes")?;
+             REMOVE INDEX IF EXISTS idx_calls_out_name ON calls;",
+        )
+        .await
+        .context("phase2(ram): drop calls indexes")?;
         info!(repo = %self.repo, idx_drop_ms = t_idx_drop.elapsed().as_millis() as u64, "phase2(ram): dropped calls indexes");
 
         // Resolve all RAM-buffered raw_edges in one pass (no DB scan needed).
@@ -1637,7 +1765,8 @@ impl IndexPipeline {
                 Some(v) if !v.is_empty() => v,
                 _ => continue,
             };
-            let best = Self::select_best_candidate(candidates, &re.from_file, re.import_path.as_deref());
+            let best =
+                Self::select_best_candidate(candidates, &re.from_file, re.import_path.as_deref());
             let best = match best {
                 Some(b) => b,
                 None => continue,
@@ -1683,8 +1812,10 @@ impl IndexPipeline {
             "DEFINE INDEX IF NOT EXISTS idx_calls_in_file  ON calls FIELDS in_file; \
              DEFINE INDEX IF NOT EXISTS idx_calls_out_file ON calls FIELDS out_file; \
              DEFINE INDEX IF NOT EXISTS idx_calls_in_name  ON calls FIELDS in_name; \
-             DEFINE INDEX IF NOT EXISTS idx_calls_out_name ON calls FIELDS out_name;"
-        ).await.context("phase2(ram): rebuild calls indexes")?;
+             DEFINE INDEX IF NOT EXISTS idx_calls_out_name ON calls FIELDS out_name;",
+        )
+        .await
+        .context("phase2(ram): rebuild calls indexes")?;
         let idx_rebuild_ms = t_idx_rebuild.elapsed().as_millis() as u64;
         info!(repo = %self.repo, idx_rebuild_ms, relate_write_ms, "phase2(ram): rebuilt calls indexes synchronously");
 
@@ -1764,7 +1895,9 @@ impl IndexPipeline {
         // We query by leaf `name` and look up raw_edge.to_name, which still stores the
         // unresolved leaf callee name — this is correct for direction-2 expansion.
         #[derive(Deserialize)]
-        struct SymbolNameRow { name: String }
+        struct SymbolNameRow {
+            name: String,
+        }
         let new_symbol_rows: Vec<SymbolNameRow> = db
             .query("SELECT name FROM symbol WHERE file IN $files GROUP BY name")
             .bind(("files", changed_files.to_vec()))
@@ -1782,7 +1915,9 @@ impl IndexPipeline {
             // Uses idx_raw_edge_from_file for the GROUP BY; the to_name lookup is bounded
             // by the number of edges with matching callee names.
             #[derive(Deserialize)]
-            struct FromFileRow { from_file: String }
+            struct FromFileRow {
+                from_file: String,
+            }
             let name_exp_rows: Vec<FromFileRow> = db
                 .query("SELECT from_file FROM raw_edge WHERE to_name IN $names GROUP BY from_file")
                 .bind(("names", new_names))
@@ -1883,16 +2018,19 @@ async fn load_all_symbols(db: &Surreal<Db>) -> Result<Vec<SymbolWithPos>> {
         .context("load_all_symbols")?
         .take(0)?;
 
-    Ok(rows.into_iter().map(|r| {
-        use crate::store::ops::SymbolWithPos;
-        SymbolWithPos {
-            fqn: strip_id_brackets_phase2(&r.fqn),
-            file: r.file,
-            name: r.name,
-            line_start: r.line_start,
-            line_end: r.line_end,
-        }
-    }).collect())
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            use crate::store::ops::SymbolWithPos;
+            SymbolWithPos {
+                fqn: strip_id_brackets_phase2(&r.fqn),
+                file: r.file,
+                name: r.name,
+                line_start: r.line_start,
+                line_end: r.line_end,
+            }
+        })
+        .collect())
 }
 
 /// Strip SurrealDB complex-ID brackets ⟨…⟩ returned by `meta::id(id)`.
@@ -1913,13 +2051,12 @@ fn resolve_raw_edge_page_from_map(
 ) {
     for row in batch {
         let resolved_to = match name_bucket.get(&row.to_name) {
-            Some(candidates) if !candidates.is_empty() => {
-                IndexPipeline::select_best_candidate(
-                    candidates,
-                    &row.from_file,
-                    row.import_path.as_deref(),
-                ).cloned()
-            }
+            Some(candidates) if !candidates.is_empty() => IndexPipeline::select_best_candidate(
+                candidates,
+                &row.from_file,
+                row.import_path.as_deref(),
+            )
+            .cloned(),
             _ => {
                 debug!(name = %row.to_name, "{}: dropping unresolved raw edge (in-memory map)", label);
                 None
@@ -1962,9 +2099,11 @@ fn parse_one_file_with_frameworks(
             for edge in fw_edges {
                 if matches!(edge.kind, crate::parsing::relations::EdgeKind::Calls) {
                     let (to_name, import_path) = match &edge.to {
-                        crate::parsing::relations::EdgeTarget::Unresolved { name, import_path, .. } => {
-                            (name.clone(), import_path.clone())
-                        }
+                        crate::parsing::relations::EdgeTarget::Unresolved {
+                            name,
+                            import_path,
+                            ..
+                        } => (name.clone(), import_path.clone()),
                         crate::parsing::relations::EdgeTarget::Resolved(qs) => {
                             (qs.name.clone(), None)
                         }
@@ -2029,7 +2168,9 @@ fn parse_one_file(file: &str) -> ParseOutput {
         .iter()
         .filter_map(|e| {
             let (to_name, import_path) = match &e.to {
-                EdgeTarget::Unresolved { name, import_path, .. } => (name.clone(), import_path.clone()),
+                EdgeTarget::Unresolved {
+                    name, import_path, ..
+                } => (name.clone(), import_path.clone()),
                 EdgeTarget::Resolved(qs) => (qs.name.clone(), None),
             };
             // Only store Calls edges (❼ spec: only `calls` table uses in_name/out_name).
@@ -2140,16 +2281,16 @@ async fn embed_parsed_file(
             // Run cache.get_many() off the async runtime (blocking FS I/O).
             let texts_for_lookup = texts.clone();
             let cache_for_lookup = cache_arc.clone();
-            let get_result = tokio::task::spawn_blocking(move || {
-                cache_for_lookup.get_many(&texts_for_lookup)
-            })
-            .await;
+            let get_result =
+                tokio::task::spawn_blocking(move || cache_for_lookup.get_many(&texts_for_lookup))
+                    .await;
 
             // Map JoinError (panic in spawn_blocking) to the degradation path.
-            let (raw_hits, miss_indices) = match map_get_many_result(&pf.path, texts.len(), get_result) {
-                Ok(result) => result,
-                Err(degraded) => return degraded,
-            };
+            let (raw_hits, miss_indices) =
+                match map_get_many_result(&pf.path, texts.len(), get_result) {
+                    Ok(result) => result,
+                    Err(degraded) => return degraded,
+                };
 
             if miss_indices.is_empty() && !raw_hits.is_empty() {
                 // 100% cache hit path.
@@ -2170,16 +2311,12 @@ async fn embed_parsed_file(
                 let mut extra_embeddings: Vec<(usize, Vec<f32>)> = Vec::new();
                 if !dim_miss_indices.is_empty() {
                     if let Some(client) = voyage {
-                        let miss_texts: Vec<String> = dim_miss_indices
-                            .iter()
-                            .map(|&i| texts[i].clone())
-                            .collect();
+                        let miss_texts: Vec<String> =
+                            dim_miss_indices.iter().map(|&i| texts[i].clone()).collect();
                         match client.embed(&miss_texts, InputType::Document).await {
                             Ok(api_results) => {
-                                let put_texts: Vec<String> = dim_miss_indices
-                                    .iter()
-                                    .map(|&i| texts[i].clone())
-                                    .collect();
+                                let put_texts: Vec<String> =
+                                    dim_miss_indices.iter().map(|&i| texts[i].clone()).collect();
                                 // put_many is blocking FS — run off the async runtime.
                                 let cache_for_put = cache_arc.clone();
                                 let put_embeddings = api_results.clone();
@@ -2245,10 +2382,8 @@ async fn embed_parsed_file(
 
                 // Call API for miss texts.
                 let api_embeddings: Option<Vec<Vec<f32>>> = if let Some(client) = voyage {
-                    let miss_texts: Vec<String> = all_miss_indices
-                        .iter()
-                        .map(|&i| texts[i].clone())
-                        .collect();
+                    let miss_texts: Vec<String> =
+                        all_miss_indices.iter().map(|&i| texts[i].clone()).collect();
                     match client.embed(&miss_texts, InputType::Document).await {
                         Ok(embs) => Some(embs),
                         Err(e) => {
@@ -2266,10 +2401,8 @@ async fn embed_parsed_file(
                         let dim = api_results[0].len();
 
                         // Cache the API results — blocking FS, run off async runtime.
-                        let miss_texts: Vec<String> = all_miss_indices
-                            .iter()
-                            .map(|&i| texts[i].clone())
-                            .collect();
+                        let miss_texts: Vec<String> =
+                            all_miss_indices.iter().map(|&i| texts[i].clone()).collect();
                         let cache_for_put = cache_arc.clone();
                         let put_embeddings = api_results.clone();
                         if let Err(e) = tokio::task::spawn_blocking(move || {
@@ -2299,10 +2432,8 @@ async fn embed_parsed_file(
                         if !re_embed_indices.is_empty()
                             && let Some(client) = voyage
                         {
-                            let re_texts: Vec<String> = re_embed_indices
-                                .iter()
-                                .map(|&i| texts[i].clone())
-                                .collect();
+                            let re_texts: Vec<String> =
+                                re_embed_indices.iter().map(|&i| texts[i].clone()).collect();
                             match client.embed(&re_texts, InputType::Document).await {
                                 Ok(re_results) => {
                                     let cache_for_put = cache_arc.clone();
@@ -2353,25 +2484,23 @@ async fn embed_parsed_file(
         None => {
             // No cache — existing behavior.
             match voyage {
-                Some(client) => {
-                    match client.embed(&texts, InputType::Document).await {
-                        Ok(embs) => EmbedFileResult {
+                Some(client) => match client.embed(&texts, InputType::Document).await {
+                    Ok(embs) => EmbedFileResult {
+                        fully_cached: false,
+                        embeddings: embs,
+                        hit_chunks: 0,
+                        miss_chunks: texts.len() as u64,
+                    },
+                    Err(e) => {
+                        warn!(file = %pf.path, error = %e, "embed failed; storing empty embeddings");
+                        EmbedFileResult {
                             fully_cached: false,
-                            embeddings: embs,
+                            embeddings: vec![vec![]; texts.len()],
                             hit_chunks: 0,
                             miss_chunks: texts.len() as u64,
-                        },
-                        Err(e) => {
-                            warn!(file = %pf.path, error = %e, "embed failed; storing empty embeddings");
-                            EmbedFileResult {
-                                fully_cached: false,
-                                embeddings: vec![vec![]; texts.len()],
-                                hit_chunks: 0,
-                                miss_chunks: texts.len() as u64,
-                            }
                         }
                     }
-                }
+                },
                 None => EmbedFileResult {
                     fully_cached: false,
                     embeddings: vec![vec![]; texts.len()],
@@ -2410,7 +2539,10 @@ async fn flush_chunk_batch(db: &Surreal<Db>, batch: Vec<ChunkRecord>) -> Result<
             map.insert("line_end".to_string(), SqlValue::from(rec.line_end));
             map.insert("content".to_string(), SqlValue::from(rec.content));
             // Packed embedding → Value::Bytes (single memcpy, no per-float enum).
-            map.insert("embedding".to_string(), SqlValue::Bytes(SqlBytes::from(rec.embedding)));
+            map.insert(
+                "embedding".to_string(),
+                SqlValue::Bytes(SqlBytes::from(rec.embedding)),
+            );
             match rec.symbol_ref {
                 Some(s) => map.insert("symbol_ref".to_string(), SqlValue::from(s)),
                 None => map.insert("symbol_ref".to_string(), SqlValue::None),
@@ -2461,19 +2593,29 @@ async fn flush_symbol_batch_native(db: &Surreal<Db>, symbols: &[Symbol]) -> Resu
             .map(|sym| {
                 let mut map: BTreeMap<String, SqlValue> = BTreeMap::new();
                 map.insert("id".to_string(), SqlValue::from(sym.qualified.fqn()));
-                map.insert("name".to_string(), SqlValue::from(sym.qualified.name.as_str()));
+                map.insert(
+                    "name".to_string(),
+                    SqlValue::from(sym.qualified.name.as_str()),
+                );
                 map.insert("kind".to_string(), SqlValue::from(kind_to_str(&sym.kind)));
-                map.insert("file".to_string(), SqlValue::from(sym.qualified.file.as_str()));
-                map.insert("line_start".to_string(), SqlValue::from(sym.line_start as i64));
+                map.insert(
+                    "file".to_string(),
+                    SqlValue::from(sym.qualified.file.as_str()),
+                );
+                map.insert(
+                    "line_start".to_string(),
+                    SqlValue::from(sym.line_start as i64),
+                );
                 map.insert("line_end".to_string(), SqlValue::from(sym.line_end as i64));
                 match &sym.signature {
                     Some(s) => map.insert("signature".to_string(), SqlValue::from(s.as_str())),
-                    None    => map.insert("signature".to_string(), SqlValue::None),
+                    None => map.insert("signature".to_string(), SqlValue::None),
                 };
                 match &sym.parent_fqn {
-                    Some(p) => map.insert("parent".to_string(), SqlValue::from(
-                        format!("symbol:⟨{}⟩", p)
-                    )),
+                    Some(p) => map.insert(
+                        "parent".to_string(),
+                        SqlValue::from(format!("symbol:⟨{}⟩", p)),
+                    ),
                     None => map.insert("parent".to_string(), SqlValue::None),
                 };
                 SqlValue::Object(SqlObject::from(map))
@@ -2494,11 +2636,11 @@ async fn flush_symbol_batch_native(db: &Surreal<Db>, symbols: &[Symbol]) -> Resu
              line_start = $input.line_start, line_end = $input.line_end, \
              signature = $input.signature, parent = $input.parent RETURN NONE",
         )
-            .bind(("data", data))
-            .await
-            .context("flush_symbol_batch_native: INSERT INTO symbol")?
-            .check()
-            .context("flush_symbol_batch_native: INSERT statement error")?;
+        .bind(("data", data))
+        .await
+        .context("flush_symbol_batch_native: INSERT INTO symbol")?
+        .check()
+        .context("flush_symbol_batch_native: INSERT statement error")?;
     }
     Ok(())
 }
@@ -2555,21 +2697,25 @@ async fn flush_edge_batch(
 
     let records: Vec<SqlValue> = batch
         .iter()
-        .map(|(from_fqn, to_fqn, line, in_file, out_file, in_name, out_name)| {
-            let mut map: BTreeMap<String, SqlValue> = BTreeMap::new();
-            map.insert("in".to_string(), SqlValue::Thing(
-                SqlThing::from(("symbol", SqlId::String(from_fqn.clone())))
-            ));
-            map.insert("out".to_string(), SqlValue::Thing(
-                SqlThing::from(("symbol", SqlId::String(to_fqn.clone())))
-            ));
-            map.insert("line".to_string(), SqlValue::from(*line));
-            map.insert("in_file".to_string(), SqlValue::from(in_file.as_str()));
-            map.insert("out_file".to_string(), SqlValue::from(out_file.as_str()));
-            map.insert("in_name".to_string(), SqlValue::from(in_name.as_str()));
-            map.insert("out_name".to_string(), SqlValue::from(out_name.as_str()));
-            SqlValue::Object(SqlObject::from(map))
-        })
+        .map(
+            |(from_fqn, to_fqn, line, in_file, out_file, in_name, out_name)| {
+                let mut map: BTreeMap<String, SqlValue> = BTreeMap::new();
+                map.insert(
+                    "in".to_string(),
+                    SqlValue::Thing(SqlThing::from(("symbol", SqlId::String(from_fqn.clone())))),
+                );
+                map.insert(
+                    "out".to_string(),
+                    SqlValue::Thing(SqlThing::from(("symbol", SqlId::String(to_fqn.clone())))),
+                );
+                map.insert("line".to_string(), SqlValue::from(*line));
+                map.insert("in_file".to_string(), SqlValue::from(in_file.as_str()));
+                map.insert("out_file".to_string(), SqlValue::from(out_file.as_str()));
+                map.insert("in_name".to_string(), SqlValue::from(in_name.as_str()));
+                map.insert("out_name".to_string(), SqlValue::from(out_name.as_str()));
+                SqlValue::Object(SqlObject::from(map))
+            },
+        )
         .collect();
 
     let data = SqlArray::from(records);
@@ -2598,11 +2744,20 @@ async fn flush_edge_batch(
 /// any artifact that a previous (unfiltered) watcher run indexed is cleaned up
 /// when it is later removed — self-healing without requiring a full rebuild.
 #[cfg(test)]
-pub(crate) fn filter_hidden_changes(repo: &std::path::Path, changes: Vec<FileChange>) -> Vec<FileChange> {
+pub(crate) fn filter_hidden_changes(
+    repo: &std::path::Path,
+    changes: Vec<FileChange>,
+) -> Vec<FileChange> {
     filter_hidden_changes_with(repo, changes, vec![], HashSet::new(), HashSet::new())
 }
 
-pub(crate) fn filter_hidden_changes_with(repo: &std::path::Path, changes: Vec<FileChange>, extra_extensions: Vec<String>, ignore_filenames: HashSet<String>, ignore_paths: HashSet<String>) -> Vec<FileChange> {
+pub(crate) fn filter_hidden_changes_with(
+    repo: &std::path::Path,
+    changes: Vec<FileChange>,
+    extra_extensions: Vec<String>,
+    ignore_filenames: HashSet<String>,
+    ignore_paths: HashSet<String>,
+) -> Vec<FileChange> {
     let filter = ChangeFilter::new_complete(repo, extra_extensions, ignore_filenames, ignore_paths);
     changes
         .into_iter()
@@ -2651,16 +2806,28 @@ mod end_to_end_persist {
         let db = open_db(home.path(), &repo).await.expect("open db");
         let pipeline = IndexPipeline::new(repo.clone(), None);
 
-        let result = pipeline.run(&db, None, true, None, None, None, &[], None).await;
-        println!("REAL-TREE PROBE: result = {:?}", result.as_ref().map(|s| (s.indexed_files, s.total_files)));
+        let result = pipeline
+            .run(&db, None, true, None, None, None, &[], None)
+            .await;
+        println!(
+            "REAL-TREE PROBE: result = {:?}",
+            result.as_ref().map(|s| (s.indexed_files, s.total_files))
+        );
 
         let chunks = count_chunks(&db).await.unwrap();
         let symbols = count_symbols(&db).await.unwrap();
         let files = count_indexed_files(&db, &repo).await.unwrap();
         println!("REAL-TREE PROBE: chunks={chunks}, symbols={symbols}, files={files}");
 
-        assert!(result.is_ok(), "full_rebuild of real source tree must succeed (got: {:?})", result.err());
-        assert!(chunks > 0, "must have chunks after full_rebuild of real source tree");
+        assert!(
+            result.is_ok(),
+            "full_rebuild of real source tree must succeed (got: {:?})",
+            result.err()
+        );
+        assert!(
+            chunks > 0,
+            "must have chunks after full_rebuild of real source tree"
+        );
         assert!(files > 0, "must have indexed files");
     }
 
@@ -2684,17 +2851,28 @@ mod end_to_end_persist {
         let files = count_indexed_files(&db, &repo).await.unwrap();
         let symbols = count_symbols(&db).await.unwrap();
 
-        println!("STEP3 — indexed_files={}, total_files={}", stats.indexed_files, stats.total_files);
+        println!(
+            "STEP3 — indexed_files={}, total_files={}",
+            stats.indexed_files, stats.total_files
+        );
         println!("STEP3 — chunks={chunks}, files={files}, symbols={symbols}");
 
-        assert!(chunks > 0,
-            "chunks must be > 0 after full_rebuild (got {chunks}); batched write path failed");
-        assert!(files > 0,
-            "indexed files must be > 0 after full_rebuild (got {files})");
-        assert!(symbols > 0,
-            "symbols must be > 0 after full_rebuild (got {symbols})");
-        assert_eq!(stats.indexed_files, files,
-            "stats.indexed_files must match count_indexed_files");
+        assert!(
+            chunks > 0,
+            "chunks must be > 0 after full_rebuild (got {chunks}); batched write path failed"
+        );
+        assert!(
+            files > 0,
+            "indexed files must be > 0 after full_rebuild (got {files})"
+        );
+        assert!(
+            symbols > 0,
+            "symbols must be > 0 after full_rebuild (got {symbols})"
+        );
+        assert_eq!(
+            stats.indexed_files, files,
+            "stats.indexed_files must match count_indexed_files"
+        );
     }
 
     /// ❷ NEW: file_meta.chunk_count is populated correctly after streaming index.
@@ -2707,12 +2885,17 @@ mod end_to_end_persist {
 
         let db = open_db(home.path(), &repo).await.expect("open db");
         let pipeline = IndexPipeline::new(repo.clone(), None);
-        pipeline.run(&db, None, true, None, None, None, &[], None).await.expect("rebuild");
+        pipeline
+            .run(&db, None, true, None, None, None, &[], None)
+            .await
+            .expect("rebuild");
 
         // Check that file_meta.chunk_count > 0 for the test file.
         use serde::Deserialize;
         #[derive(Deserialize)]
-        struct Row { chunk_count: i64 }
+        struct Row {
+            chunk_count: i64,
+        }
         let rows: Vec<Row> = db
             .query("SELECT chunk_count FROM file_meta WHERE repo = $repo")
             .bind(("repo", repo.clone()))
@@ -2739,10 +2922,16 @@ mod end_to_end_persist {
 
         let db = open_db(home.path(), &repo).await.expect("open db");
         let pipeline = IndexPipeline::new(repo.clone(), None);
-        pipeline.run(&db, None, true, None, None, None, &[], None).await.expect("rebuild");
+        pipeline
+            .run(&db, None, true, None, None, None, &[], None)
+            .await
+            .expect("rebuild");
 
         let marker = get_meta(&db, EDGES_RESOLVED_KEY).await.unwrap();
-        assert!(marker.is_some(), "edges_resolved marker must be set after full_rebuild");
+        assert!(
+            marker.is_some(),
+            "edges_resolved marker must be set after full_rebuild"
+        );
     }
 }
 
@@ -2774,12 +2963,9 @@ mod resolution_tests {
         }
 
         // Request only "foo" and "bar" — must NOT return "baz".
-        let result = find_symbols_by_names_with_pos(
-            &db,
-            &["foo".to_string(), "bar".to_string()],
-        )
-        .await
-        .unwrap();
+        let result = find_symbols_by_names_with_pos(&db, &["foo".to_string(), "bar".to_string()])
+            .await
+            .unwrap();
 
         assert_eq!(result.len(), 2, "should return exactly 2 symbols");
         for s in &result {
@@ -2797,13 +2983,32 @@ mod resolution_tests {
     #[test]
     fn tie_break_sort_deterministic() {
         let mut candidates: Vec<SymbolWithPos> = vec![
-            SymbolWithPos { fqn: "/c.rs::f".to_string(), file: "/c.rs".to_string(), name: "f".to_string(), line_start: 10, line_end: 20 },
-            SymbolWithPos { fqn: "/a.rs::f".to_string(), file: "/a.rs".to_string(), name: "f".to_string(), line_start: 5, line_end: 15 },
-            SymbolWithPos { fqn: "/b.rs::f".to_string(), file: "/b.rs".to_string(), name: "f".to_string(), line_start: 1, line_end: 5 },
+            SymbolWithPos {
+                fqn: "/c.rs::f".to_string(),
+                file: "/c.rs".to_string(),
+                name: "f".to_string(),
+                line_start: 10,
+                line_end: 20,
+            },
+            SymbolWithPos {
+                fqn: "/a.rs::f".to_string(),
+                file: "/a.rs".to_string(),
+                name: "f".to_string(),
+                line_start: 5,
+                line_end: 15,
+            },
+            SymbolWithPos {
+                fqn: "/b.rs::f".to_string(),
+                file: "/b.rs".to_string(),
+                name: "f".to_string(),
+                line_start: 1,
+                line_end: 5,
+            },
         ];
 
         candidates.sort_unstable_by(|a, b| {
-            a.file.cmp(&b.file)
+            a.file
+                .cmp(&b.file)
                 .then(a.line_start.cmp(&b.line_start))
                 .then(a.line_end.cmp(&b.line_end))
         });
@@ -2819,8 +3024,20 @@ mod resolution_tests {
     fn same_file_preferred_over_sorted_first() {
         let from_file = "/b.rs";
         let candidates: Vec<SymbolWithPos> = vec![
-            SymbolWithPos { fqn: "/a.rs::f".to_string(), file: "/a.rs".to_string(), name: "f".to_string(), line_start: 1, line_end: 5 },
-            SymbolWithPos { fqn: "/b.rs::f".to_string(), file: "/b.rs".to_string(), name: "f".to_string(), line_start: 10, line_end: 20 },
+            SymbolWithPos {
+                fqn: "/a.rs::f".to_string(),
+                file: "/a.rs".to_string(),
+                name: "f".to_string(),
+                line_start: 1,
+                line_end: 5,
+            },
+            SymbolWithPos {
+                fqn: "/b.rs::f".to_string(),
+                file: "/b.rs".to_string(),
+                name: "f".to_string(),
+                line_start: 10,
+                line_end: 20,
+            },
         ];
 
         // Same-file candidate (/b.rs) should be preferred even though /a.rs sorts first.
@@ -2838,8 +3055,8 @@ mod resolution_tests {
 // ─── Concurrency bound test ───────────────────────────────────────────────
 #[cfg(test)]
 mod concurrency_tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// ❶ NEW: embedding stage respects configured concurrency N.
     /// We mock the embed function with a counter to ensure at most N run concurrently.
@@ -2921,8 +3138,16 @@ mod keyset_pagination_tests {
             .map(|i| {
                 // Rows 1, 6, 11 share from_file="/a.rs" and to_name="foo" — these are the
                 // kind of non-unique-on-content rows that caused OFFSET to potentially skip.
-                let from_file = if i % 5 == 1 { "/a.rs".to_string() } else { format!("/f{i}.rs") };
-                let to_name = if i % 5 == 1 { "foo".to_string() } else { format!("sym{i}") };
+                let from_file = if i % 5 == 1 {
+                    "/a.rs".to_string()
+                } else {
+                    format!("/f{i}.rs")
+                };
+                let to_name = if i % 5 == 1 {
+                    "foo".to_string()
+                } else {
+                    format!("sym{i}")
+                };
                 let from_name = format!("caller{i}");
                 let from_fqn = format!("{}::{}", from_file, from_name);
                 RawEdge {
@@ -2950,7 +3175,9 @@ mod keyset_pagination_tests {
 
         loop {
             #[derive(Deserialize)]
-            struct Row { id_str: String }
+            struct Row {
+                id_str: String,
+            }
             let batch: Vec<Row> = db
                 .query(
                     "SELECT type::string(id) AS id_str FROM raw_edge \
@@ -3084,17 +3311,32 @@ mod keyset_pagination_tests {
             .bind(("data", pass2))
             .await;
 
-        assert!(result.is_ok(), "pass2 insert must not fail: {:?}", result.err());
-        result.unwrap().check().expect("pass2 insert must have no per-statement errors");
+        assert!(
+            result.is_ok(),
+            "pass2 insert must not fail: {:?}",
+            result.err()
+        );
+        result
+            .unwrap()
+            .check()
+            .expect("pass2 insert must have no per-statement errors");
 
         // Verify 5 rows total (pass1 rows were deleted, pass2 replaced them).
         #[derive(Deserialize)]
-        struct CountRow { count: i64 }
+        struct CountRow {
+            count: i64,
+        }
         let counts: Vec<CountRow> = db
             .query("SELECT count() AS count FROM raw_edge GROUP ALL")
-            .await.unwrap().take(0).unwrap();
+            .await
+            .unwrap()
+            .take(0)
+            .unwrap();
         let count = counts.first().map(|r| r.count).unwrap_or(0);
-        assert_eq!(count, 5, "must have exactly 5 rows after pass2 (got {count})");
+        assert_eq!(
+            count, 5,
+            "must have exactly 5 rows after pass2 (got {count})"
+        );
 
         // Phase 2 keyset pagination must visit all 5 rows exactly once.
         let mut cursor = String::new();
@@ -3102,7 +3344,9 @@ mod keyset_pagination_tests {
 
         loop {
             #[derive(Deserialize)]
-            struct Row { id_str: String }
+            struct Row {
+                id_str: String,
+            }
             let batch: Vec<Row> = db
                 .query(
                     "SELECT type::string(id) AS id_str FROM raw_edge \
@@ -3110,15 +3354,29 @@ mod keyset_pagination_tests {
                 )
                 .bind(("cursor", cursor.clone()))
                 .bind(("page", 3i64))
-                .await.unwrap().take(0).unwrap();
+                .await
+                .unwrap()
+                .take(0)
+                .unwrap();
 
-            if batch.is_empty() { break; }
+            if batch.is_empty() {
+                break;
+            }
             cursor = batch.last().map(|r| r.id_str.clone()).unwrap_or(cursor);
-            for row in &batch { visited.push(row.id_str.clone()); }
-            if (batch.len() as i64) < 3 { break; }
+            for row in &batch {
+                visited.push(row.id_str.clone());
+            }
+            if (batch.len() as i64) < 3 {
+                break;
+            }
         }
 
-        assert_eq!(visited.len(), 5, "phase2 keyset must visit all 5 rows (got {})", visited.len());
+        assert_eq!(
+            visited.len(),
+            5,
+            "phase2 keyset must visit all 5 rows (got {})",
+            visited.len()
+        );
 
         let mut deduped = visited.clone();
         deduped.sort_unstable();
@@ -3152,8 +3410,10 @@ mod per_edge_backfill_tests {
 
         // Create symbols for the four endpoints.
         for (file, name) in &[
-            ("/a.rs", "foo"), ("/a.rs", "bar"),
-            ("/b.rs", "baz"), ("/b.rs", "qux"),
+            ("/a.rs", "foo"),
+            ("/a.rs", "bar"),
+            ("/b.rs", "baz"),
+            ("/b.rs", "qux"),
         ] {
             db.query(format!(
                 "UPSERT symbol:`⟨{file}::{name}⟩` SET \
@@ -3168,13 +3428,17 @@ mod per_edge_backfill_tests {
         // Both share in_file=/a.rs and out_file=/b.rs.
         db.query(
             "RELATE symbol:`⟨/a.rs::foo⟩`->calls->symbol:`⟨/b.rs::baz⟩` \
-             SET line = 1, in_file = '/a.rs', out_file = '/b.rs'"
-        ).await.unwrap();
+             SET line = 1, in_file = '/a.rs', out_file = '/b.rs'",
+        )
+        .await
+        .unwrap();
 
         db.query(
             "RELATE symbol:`⟨/a.rs::bar⟩`->calls->symbol:`⟨/b.rs::qux⟩` \
-             SET line = 2, in_file = '/a.rs', out_file = '/b.rs'"
-        ).await.unwrap();
+             SET line = 2, in_file = '/a.rs', out_file = '/b.rs'",
+        )
+        .await
+        .unwrap();
 
         // Verify pre-migration state: in_name IS NONE on both.
         #[derive(Deserialize, Debug)]
@@ -3216,7 +3480,11 @@ mod per_edge_backfill_tests {
             .take(0)
             .unwrap();
 
-        assert_eq!(after.len(), 2, "must still have 2 call edges after migration");
+        assert_eq!(
+            after.len(),
+            2,
+            "must still have 2 call edges after migration"
+        );
 
         // Build a lookup: id -> (in_name, out_name).
         let edge_map: std::collections::HashMap<String, (Option<String>, Option<String>)> = after
@@ -3225,14 +3493,8 @@ mod per_edge_backfill_tests {
             .collect();
 
         // Verify both edges have non-None, DISTINCT in_name/out_name pairs.
-        let all_in_names: Vec<&str> = after
-            .iter()
-            .filter_map(|r| r.in_name.as_deref())
-            .collect();
-        let all_out_names: Vec<&str> = after
-            .iter()
-            .filter_map(|r| r.out_name.as_deref())
-            .collect();
+        let all_in_names: Vec<&str> = after.iter().filter_map(|r| r.in_name.as_deref()).collect();
+        let all_out_names: Vec<&str> = after.iter().filter_map(|r| r.out_name.as_deref()).collect();
 
         // Both in_names must be present and distinct.
         assert_eq!(all_in_names.len(), 2, "both edges must have in_name set");
@@ -3255,11 +3517,19 @@ mod per_edge_backfill_tests {
         // Exact values: {foo,bar} and {baz,qux} in some order.
         let mut in_names_sorted = all_in_names.to_vec();
         in_names_sorted.sort_unstable();
-        assert_eq!(in_names_sorted, vec!["bar", "foo"], "in_names must be {{foo,bar}}");
+        assert_eq!(
+            in_names_sorted,
+            vec!["bar", "foo"],
+            "in_names must be {{foo,bar}}"
+        );
 
         let mut out_names_sorted = all_out_names.to_vec();
         out_names_sorted.sort_unstable();
-        assert_eq!(out_names_sorted, vec!["baz", "qux"], "out_names must be {{baz,qux}}");
+        assert_eq!(
+            out_names_sorted,
+            vec!["baz", "qux"],
+            "out_names must be {{baz,qux}}"
+        );
 
         println!("per_edge_backfill: edge_map = {:?}", edge_map);
     }
@@ -3313,11 +3583,16 @@ mod incremental_phase2_tests {
     /// Count calls rows where in_file = $file.
     async fn count_calls_from(db: &Surreal<Db>, in_file: &str) -> usize {
         #[derive(Deserialize)]
-        struct Row { count: i64 }
+        struct Row {
+            count: i64,
+        }
         let rows: Vec<Row> = db
             .query("SELECT count() AS count FROM calls WHERE in_file = $f GROUP ALL")
             .bind(("f", in_file.to_string()))
-            .await.unwrap().take(0).unwrap();
+            .await
+            .unwrap()
+            .take(0)
+            .unwrap();
         rows.first().map(|r| r.count as usize).unwrap_or(0)
     }
 
@@ -3334,12 +3609,14 @@ mod incremental_phase2_tests {
             .query("SELECT in_file, out_file, in_name, out_name FROM calls ORDER BY in_file, in_name, out_name")
             .await.unwrap().take(0).unwrap();
         rows.into_iter()
-            .map(|r| (
-                r.in_file,
-                r.out_file,
-                r.in_name.unwrap_or_default(),
-                r.out_name.unwrap_or_default(),
-            ))
+            .map(|r| {
+                (
+                    r.in_file,
+                    r.out_file,
+                    r.in_name.unwrap_or_default(),
+                    r.out_name.unwrap_or_default(),
+                )
+            })
             .collect()
     }
 
@@ -3381,11 +3658,18 @@ mod incremental_phase2_tests {
         insert_raw_edge(&db, "/b.rs", "b_fn", "c_fn").await;
 
         // Run a full Phase 2 to establish baseline calls rows.
-        pipeline.resolve_edges_phase2(&db).await.expect("initial full phase2");
+        pipeline
+            .resolve_edges_phase2(&db)
+            .await
+            .expect("initial full phase2");
 
         let initial_calls = all_calls(&db).await;
         println!("Initial calls: {:?}", initial_calls);
-        assert_eq!(initial_calls.len(), 2, "initial state must have 2 calls edges");
+        assert_eq!(
+            initial_calls.len(),
+            2,
+            "initial state must have 2 calls edges"
+        );
 
         // Record the calls rows for C (should be 0 — C has no outgoing edges).
         let c_calls_before = count_calls_from(&db, "/c.rs").await;
@@ -3413,7 +3697,8 @@ mod incremental_phase2_tests {
         // it still has a surviving calls row pointing at B when we call this method
         // (we did not call delete_files_data_bulk in this direct-call test).
         let changed = vec!["/b.rs".to_string()];
-        pipeline.resolve_edges_incremental(&db, &changed, &[])
+        pipeline
+            .resolve_edges_incremental(&db, &changed, &[])
             .await
             .expect("incremental phase2 must succeed");
 
@@ -3423,7 +3708,8 @@ mod incremental_phase2_tests {
 
         // Must still have exactly 2 calls edges.
         assert_eq!(
-            final_calls.len(), 2,
+            final_calls.len(),
+            2,
             "must have 2 calls edges after incremental (A->B and B->C); got {:?}",
             final_calls
         );
@@ -3431,17 +3717,23 @@ mod incremental_phase2_tests {
         // A->B edge must be present.
         // in_name and out_name now store full FQNs (file::name).
         let a_to_b = final_calls.iter().any(|(in_f, out_f, in_n, out_n)| {
-            in_f == "/a.rs" && out_f == "/b.rs"
-                && in_n == "/a.rs::a_fn" && out_n == "/b.rs::b_fn"
+            in_f == "/a.rs" && out_f == "/b.rs" && in_n == "/a.rs::a_fn" && out_n == "/b.rs::b_fn"
         });
-        assert!(a_to_b, "A->B edge (a_fn -> b_fn) must be present; got {:?}", final_calls);
+        assert!(
+            a_to_b,
+            "A->B edge (a_fn -> b_fn) must be present; got {:?}",
+            final_calls
+        );
 
         // B->C edge must be present.
         let b_to_c = final_calls.iter().any(|(in_f, out_f, in_n, out_n)| {
-            in_f == "/b.rs" && out_f == "/c.rs"
-                && in_n == "/b.rs::b_fn" && out_n == "/c.rs::c_fn"
+            in_f == "/b.rs" && out_f == "/c.rs" && in_n == "/b.rs::b_fn" && out_n == "/c.rs::c_fn"
         });
-        assert!(b_to_c, "B->C edge (b_fn -> c_fn) must be present; got {:?}", final_calls);
+        assert!(
+            b_to_c,
+            "B->C edge (b_fn -> c_fn) must be present; got {:?}",
+            final_calls
+        );
 
         // C's outgoing calls are still 0 (untouched — C was not in changed set
         // and had no outgoing edges; its raw_edge rows were not touched).
@@ -3485,16 +3777,28 @@ mod incremental_phase2_tests {
         insert_raw_edge(&db, "/x_caller.rs", "x_fn", "foo").await;
 
         // Full Phase 2: X→foo resolves to Z (the only candidate).
-        pipeline.resolve_edges_phase2(&db).await.expect("initial full phase2");
+        pipeline
+            .resolve_edges_phase2(&db)
+            .await
+            .expect("initial full phase2");
 
         let initial_calls = all_calls(&db).await;
         println!("Initial calls: {:?}", initial_calls);
-        assert_eq!(initial_calls.len(), 1, "initial state must have exactly 1 calls edge");
+        assert_eq!(
+            initial_calls.len(),
+            1,
+            "initial state must have exactly 1 calls edge"
+        );
         let x_to_z = initial_calls.iter().any(|(in_f, out_f, _, out_n)| {
-            in_f == "/x_caller.rs" && out_f == "/z_defines_foo.rs"
+            in_f == "/x_caller.rs"
+                && out_f == "/z_defines_foo.rs"
                 && out_n == "/z_defines_foo.rs::foo"
         });
-        assert!(x_to_z, "X→foo must initially resolve to Z; got {:?}", initial_calls);
+        assert!(
+            x_to_z,
+            "X→foo must initially resolve to Z; got {:?}",
+            initial_calls
+        );
 
         // ── "Add" file W: insert its symbol foo ────────────────────────────
         // W sorts before Z lexicographically, so it should win the tie-break.
@@ -3516,13 +3820,16 @@ mod incremental_phase2_tests {
 
         // Still exactly 1 edge (X→foo).
         assert_eq!(
-            final_calls.len(), 1,
-            "must still have exactly 1 calls edge after incremental; got {:?}", final_calls
+            final_calls.len(),
+            1,
+            "must still have exactly 1 calls edge after incremental; got {:?}",
+            final_calls
         );
 
         // X→foo must now point to W ("/a_defines_foo.rs"), not Z.
         let x_to_w = final_calls.iter().any(|(in_f, out_f, _, out_n)| {
-            in_f == "/x_caller.rs" && out_f == "/a_defines_foo.rs"
+            in_f == "/x_caller.rs"
+                && out_f == "/a_defines_foo.rs"
                 && out_n == "/a_defines_foo.rs::foo"
         });
         assert!(
@@ -3565,7 +3872,10 @@ mod incremental_phase2_tests {
         insert_raw_edge(&db, "/x.rs", "x_fn", "bar").await;
 
         // Full Phase 2: X→bar→W (W is lex-first).
-        pipeline.resolve_edges_phase2(&db).await.expect("initial full phase2");
+        pipeline
+            .resolve_edges_phase2(&db)
+            .await
+            .expect("initial full phase2");
 
         let initial_calls = all_calls(&db).await;
         println!("Initial calls: {:?}", initial_calls);
@@ -3573,14 +3883,20 @@ mod incremental_phase2_tests {
         let x_to_w = initial_calls.iter().any(|(in_f, out_f, _, out_n)| {
             in_f == "/x.rs" && out_f == "/w.rs" && out_n == "/w.rs::bar"
         });
-        assert!(x_to_w, "X→bar must initially resolve to W; got {:?}", initial_calls);
+        assert!(
+            x_to_w,
+            "X→bar must initially resolve to W; got {:?}",
+            initial_calls
+        );
 
         // ── Simulate production incremental path for W being edited (bar removed) ──
 
         // Step 1: Pre-delete query (before bulk delete) — finds X as a caller of W.
         use serde::Deserialize;
         #[derive(Deserialize)]
-        struct PreDeleteRow { in_file: String }
+        struct PreDeleteRow {
+            in_file: String,
+        }
         let changed_files = vec!["/w.rs".to_string()];
         let pre_rows: Vec<PreDeleteRow> = db
             .query(
@@ -3589,18 +3905,28 @@ mod incremental_phase2_tests {
                  GROUP BY in_file",
             )
             .bind(("files", changed_files.clone()))
-            .await.unwrap().take(0).unwrap();
+            .await
+            .unwrap()
+            .take(0)
+            .unwrap();
         let pre_delete_callers: Vec<String> = pre_rows.into_iter().map(|r| r.in_file).collect();
         println!("pre_delete_callers: {:?}", pre_delete_callers);
         assert!(
             pre_delete_callers.contains(&"/x.rs".to_string()),
-            "pre-delete query must find X as a caller of W; got {:?}", pre_delete_callers
+            "pre-delete query must find X as a caller of W; got {:?}",
+            pre_delete_callers
         );
 
         // Step 2: Simulate bulk delete of W (removes W's symbols, raw_edges, calls).
-        db.query("DELETE FROM symbol WHERE file = '/w.rs'").await.unwrap();
-        db.query("DELETE FROM raw_edge WHERE from_file = '/w.rs'").await.unwrap();
-        db.query("DELETE FROM calls WHERE in_file = '/w.rs' OR out_file = '/w.rs'").await.unwrap();
+        db.query("DELETE FROM symbol WHERE file = '/w.rs'")
+            .await
+            .unwrap();
+        db.query("DELETE FROM raw_edge WHERE from_file = '/w.rs'")
+            .await
+            .unwrap();
+        db.query("DELETE FROM calls WHERE in_file = '/w.rs' OR out_file = '/w.rs'")
+            .await
+            .unwrap();
 
         // Step 3: Re-index W without bar (W edited, bar removed — only x_fn raw_edge
         // came from X, not W, so W has no outgoing edges to re-add). W's symbol row
@@ -3622,13 +3948,16 @@ mod incremental_phase2_tests {
         });
         assert!(
             x_to_y,
-            "X→bar must re-resolve to Y after W removes bar; got {:?}", final_calls
+            "X→bar must re-resolve to Y after W removes bar; got {:?}",
+            final_calls
         );
 
         // Must have exactly 1 edge (X→bar→Y).
         assert_eq!(
-            final_calls.len(), 1,
-            "must have exactly 1 calls edge after re-resolve; got {:?}", final_calls
+            final_calls.len(),
+            1,
+            "must have exactly 1 calls edge after re-resolve; got {:?}",
+            final_calls
         );
     }
 
@@ -3661,21 +3990,30 @@ mod incremental_phase2_tests {
         insert_raw_edge(&db, "/x.rs", "x_fn", "foo").await;
 
         // Full Phase 2: X→foo→W.
-        pipeline.resolve_edges_phase2(&db).await.expect("initial full phase2");
+        pipeline
+            .resolve_edges_phase2(&db)
+            .await
+            .expect("initial full phase2");
 
         let initial_calls = all_calls(&db).await;
         assert_eq!(initial_calls.len(), 1, "initial: 1 calls edge");
         let x_to_w = initial_calls.iter().any(|(in_f, out_f, _, out_n)| {
             in_f == "/x.rs" && out_f == "/w.rs" && out_n == "/w.rs::foo"
         });
-        assert!(x_to_w, "X→foo must initially resolve to W; got {:?}", initial_calls);
+        assert!(
+            x_to_w,
+            "X→foo must initially resolve to W; got {:?}",
+            initial_calls
+        );
 
         // ── Simulate production incremental path for W being edited (foo kept) ──
 
         // Step 1: Pre-delete query — finds X.
         use serde::Deserialize;
         #[derive(Deserialize)]
-        struct PreDeleteRow { in_file: String }
+        struct PreDeleteRow {
+            in_file: String,
+        }
         let changed_files = vec!["/w.rs".to_string()];
         let pre_rows: Vec<PreDeleteRow> = db
             .query(
@@ -3684,24 +4022,36 @@ mod incremental_phase2_tests {
                  GROUP BY in_file",
             )
             .bind(("files", changed_files.clone()))
-            .await.unwrap().take(0).unwrap();
+            .await
+            .unwrap()
+            .take(0)
+            .unwrap();
         let pre_delete_callers: Vec<String> = pre_rows.into_iter().map(|r| r.in_file).collect();
         println!("pre_delete_callers: {:?}", pre_delete_callers);
         assert!(
             pre_delete_callers.contains(&"/x.rs".to_string()),
-            "pre-delete query must find X; got {:?}", pre_delete_callers
+            "pre-delete query must find X; got {:?}",
+            pre_delete_callers
         );
 
         // Step 2: Simulate bulk delete of W (removes W's calls rows — including X→foo→W).
-        db.query("DELETE FROM calls WHERE in_file = '/w.rs' OR out_file = '/w.rs'").await.unwrap();
-        db.query("DELETE FROM raw_edge WHERE from_file = '/w.rs'").await.unwrap();
+        db.query("DELETE FROM calls WHERE in_file = '/w.rs' OR out_file = '/w.rs'")
+            .await
+            .unwrap();
+        db.query("DELETE FROM raw_edge WHERE from_file = '/w.rs'")
+            .await
+            .unwrap();
         // NOTE: W's symbol (foo) and X's raw_edge remain intact (only calls is wiped by
         // delete_files_data_bulk in production for the calls/raw_edge tables of changed files;
         // X is unchanged so its raw_edge row survives).
 
         // Confirm X's calls row is gone after bulk delete.
         let after_delete = all_calls(&db).await;
-        assert_eq!(after_delete.len(), 0, "X→foo must be gone after simulated bulk delete");
+        assert_eq!(
+            after_delete.len(),
+            0,
+            "X→foo must be gone after simulated bulk delete"
+        );
 
         // Step 3: Re-index W — foo still present (no change to symbol row).
         // (Symbol already exists from initial setup; no action needed.)
@@ -3727,8 +4077,10 @@ mod incremental_phase2_tests {
         );
 
         assert_eq!(
-            final_calls.len(), 1,
-            "must have exactly 1 calls edge; got {:?}", final_calls
+            final_calls.len(),
+            1,
+            "must have exactly 1 calls edge; got {:?}",
+            final_calls
         );
     }
 }
@@ -3794,17 +4146,21 @@ mod hidden_change_filter_tests {
         assert!(
             !has_claude_modified,
             ".claude/ Modified must be dropped; got: {:?}",
-            filtered.iter().map(|c| (&c.path, &c.kind)).collect::<Vec<_>>()
+            filtered
+                .iter()
+                .map(|c| (&c.path, &c.kind))
+                .collect::<Vec<_>>()
         );
 
         // .eslintrc.json Modified must survive (root-level dot-file).
-        let has_eslintrc = filtered
-            .iter()
-            .any(|c| c.path.ends_with(".eslintrc.json"));
+        let has_eslintrc = filtered.iter().any(|c| c.path.ends_with(".eslintrc.json"));
         assert!(
             has_eslintrc,
             ".eslintrc.json must survive filtering; got: {:?}",
-            filtered.iter().map(|c| (&c.path, &c.kind)).collect::<Vec<_>>()
+            filtered
+                .iter()
+                .map(|c| (&c.path, &c.kind))
+                .collect::<Vec<_>>()
         );
 
         // src/main.rs Modified must survive.
@@ -3814,7 +4170,10 @@ mod hidden_change_filter_tests {
         assert!(
             has_src_main,
             "src/main.rs must survive filtering; got: {:?}",
-            filtered.iter().map(|c| (&c.path, &c.kind)).collect::<Vec<_>>()
+            filtered
+                .iter()
+                .map(|c| (&c.path, &c.kind))
+                .collect::<Vec<_>>()
         );
 
         // .claude/old.md Deleted must survive.
@@ -3824,7 +4183,10 @@ mod hidden_change_filter_tests {
         assert!(
             has_claude_deleted,
             ".claude/old.md Deleted must survive (self-heal); got: {:?}",
-            filtered.iter().map(|c| (&c.path, &c.kind)).collect::<Vec<_>>()
+            filtered
+                .iter()
+                .map(|c| (&c.path, &c.kind))
+                .collect::<Vec<_>>()
         );
 
         // Total surviving: .eslintrc.json, src/main.rs, .claude/old.md Deleted = 3
@@ -3832,7 +4194,10 @@ mod hidden_change_filter_tests {
             filtered.len(),
             3,
             "expected 3 changes to survive; got: {:?}",
-            filtered.iter().map(|c| (&c.path, &c.kind)).collect::<Vec<_>>()
+            filtered
+                .iter()
+                .map(|c| (&c.path, &c.kind))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -3869,35 +4234,65 @@ mod hidden_change_filter_tests {
         std::fs::File::create(&gen_rs).unwrap();
 
         let changes = vec![
-            FileChange { path: src_main.to_str().unwrap().to_string(), kind: ChangeKind::Modified },
-            FileChange { path: exe.to_str().unwrap().to_string(), kind: ChangeKind::Added },
-            FileChange { path: dep.to_str().unwrap().to_string(), kind: ChangeKind::Modified },
-            FileChange { path: gen_rs.to_str().unwrap().to_string(), kind: ChangeKind::Added },
+            FileChange {
+                path: src_main.to_str().unwrap().to_string(),
+                kind: ChangeKind::Modified,
+            },
+            FileChange {
+                path: exe.to_str().unwrap().to_string(),
+                kind: ChangeKind::Added,
+            },
+            FileChange {
+                path: dep.to_str().unwrap().to_string(),
+                kind: ChangeKind::Modified,
+            },
+            FileChange {
+                path: gen_rs.to_str().unwrap().to_string(),
+                kind: ChangeKind::Added,
+            },
             // Deleted artifact: must survive so a previously-indexed entry is cleaned up.
-            FileChange { path: exe.to_str().unwrap().to_string(), kind: ChangeKind::Deleted },
+            FileChange {
+                path: exe.to_str().unwrap().to_string(),
+                kind: ChangeKind::Deleted,
+            },
         ];
 
         let filtered = filter_hidden_changes(root, changes);
 
         // src/main.rs survives.
         assert!(
-            filtered.iter().any(|c| c.path.ends_with("main.rs") && c.kind == ChangeKind::Modified),
+            filtered
+                .iter()
+                .any(|c| c.path.ends_with("main.rs") && c.kind == ChangeKind::Modified),
             "src/main.rs Modified must survive; got: {:?}",
-            filtered.iter().map(|c| (&c.path, &c.kind)).collect::<Vec<_>>()
+            filtered
+                .iter()
+                .map(|c| (&c.path, &c.kind))
+                .collect::<Vec<_>>()
         );
 
         // No Added/Modified target/ artifact survives (exe, .d, generated.rs all dropped).
         assert!(
-            !filtered.iter().any(|c| c.path.contains("target") && c.kind != ChangeKind::Deleted),
+            !filtered
+                .iter()
+                .any(|c| c.path.contains("target") && c.kind != ChangeKind::Deleted),
             "no Added/Modified target/ artifact may survive; got: {:?}",
-            filtered.iter().map(|c| (&c.path, &c.kind)).collect::<Vec<_>>()
+            filtered
+                .iter()
+                .map(|c| (&c.path, &c.kind))
+                .collect::<Vec<_>>()
         );
 
         // The Deleted artifact survives (self-heal).
         assert!(
-            filtered.iter().any(|c| c.path.contains("target") && c.kind == ChangeKind::Deleted),
+            filtered
+                .iter()
+                .any(|c| c.path.contains("target") && c.kind == ChangeKind::Deleted),
             "Deleted target/ artifact must survive for self-heal; got: {:?}",
-            filtered.iter().map(|c| (&c.path, &c.kind)).collect::<Vec<_>>()
+            filtered
+                .iter()
+                .map(|c| (&c.path, &c.kind))
+                .collect::<Vec<_>>()
         );
 
         // Surviving: src/main.rs + the one Deleted artifact = 2.
@@ -3905,7 +4300,10 @@ mod hidden_change_filter_tests {
             filtered.len(),
             2,
             "expected exactly 2 changes to survive; got: {:?}",
-            filtered.iter().map(|c| (&c.path, &c.kind)).collect::<Vec<_>>()
+            filtered
+                .iter()
+                .map(|c| (&c.path, &c.kind))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -3941,26 +4339,44 @@ mod hidden_change_filter_tests {
         let filtered = filter_hidden_changes_with(root, changes, vec![], ignore, HashSet::new());
 
         assert!(
-            filtered.iter().any(|c| c.path.ends_with("main.rs") && c.kind == ChangeKind::Modified),
+            filtered
+                .iter()
+                .any(|c| c.path.ends_with("main.rs") && c.kind == ChangeKind::Modified),
             "src/main.rs Modified must survive; got: {:?}",
-            filtered.iter().map(|c| (&c.path, &c.kind)).collect::<Vec<_>>()
+            filtered
+                .iter()
+                .map(|c| (&c.path, &c.kind))
+                .collect::<Vec<_>>()
         );
         assert!(
-            !filtered.iter().any(|c| c.path.ends_with("CLAUDE.md") && c.kind == ChangeKind::Modified),
+            !filtered
+                .iter()
+                .any(|c| c.path.ends_with("CLAUDE.md") && c.kind == ChangeKind::Modified),
             "CLAUDE.md Modified must be dropped; got: {:?}",
-            filtered.iter().map(|c| (&c.path, &c.kind)).collect::<Vec<_>>()
+            filtered
+                .iter()
+                .map(|c| (&c.path, &c.kind))
+                .collect::<Vec<_>>()
         );
         assert!(
-            filtered.iter().any(|c| c.path.ends_with("CLAUDE.md") && c.kind == ChangeKind::Deleted),
+            filtered
+                .iter()
+                .any(|c| c.path.ends_with("CLAUDE.md") && c.kind == ChangeKind::Deleted),
             "CLAUDE.md Deleted must survive for self-heal; got: {:?}",
-            filtered.iter().map(|c| (&c.path, &c.kind)).collect::<Vec<_>>()
+            filtered
+                .iter()
+                .map(|c| (&c.path, &c.kind))
+                .collect::<Vec<_>>()
         );
 
         assert_eq!(
             filtered.len(),
             2,
             "expected 2 changes (main.rs Modified + CLAUDE.md Deleted); got: {:?}",
-            filtered.iter().map(|c| (&c.path, &c.kind)).collect::<Vec<_>>()
+            filtered
+                .iter()
+                .map(|c| (&c.path, &c.kind))
+                .collect::<Vec<_>>()
         );
     }
 }
@@ -3992,8 +4408,8 @@ mod perf_fix_tests {
     // still in place, peak would be 1.
     #[tokio::test]
     async fn cached_file_processing_is_concurrent_not_serial() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
 
         let concurrency = 4usize;
         let file_count = 8usize;
@@ -4061,7 +4477,10 @@ mod perf_fix_tests {
             })
             .await;
 
-        assert!(get_result.is_err(), "panicking spawn_blocking must yield Err(JoinError)");
+        assert!(
+            get_result.is_err(),
+            "panicking spawn_blocking must yield Err(JoinError)"
+        );
 
         // n_texts = 3 → degraded result must be exactly 3 empty embedding slots.
         let mapped = map_get_many_result("/test/panic_file.rs", 3, get_result);
@@ -4141,7 +4560,10 @@ mod perf_fix_tests {
             .expect("full build must succeed");
 
         let initial_file_count = count_indexed_files(&db, &repo).await.unwrap();
-        assert_eq!(initial_file_count, 4, "all four files must be indexed after full build");
+        assert_eq!(
+            initial_file_count, 4,
+            "all four files must be indexed after full build"
+        );
 
         // Modify only file_a on disk so its content changes.
         std::fs::write(&file_a, "fn alpha_v2() {}\nfn alpha_extra() {}\n").unwrap();
@@ -4170,8 +4592,7 @@ mod perf_fix_tests {
         // The stats should reflect the change set size, not the full repo.
         // total_files must come from stored_meta count (not a fresh walk).
         assert_eq!(
-            stats.total_files,
-            initial_file_count as u64,
+            stats.total_files, initial_file_count as u64,
             "total_files must equal stored_meta count from the prior run ({initial_file_count}), not a fresh walk result"
         );
 
@@ -4183,10 +4604,22 @@ mod perf_fix_tests {
 
         // Match by filename suffix — path normalization (/ vs \) may differ
         // between what we constructed and what walk_repo stored in the DB.
-        let b_meta = all_meta.iter().find(|m| m.path.ends_with("b.rs")).expect("file_b must have meta");
-        let c_meta = all_meta.iter().find(|m| m.path.ends_with("c.rs")).expect("file_c must have meta");
-        let d_meta = all_meta.iter().find(|m| m.path.ends_with("d.rs")).expect("file_d must have meta");
-        let a_meta_stored = all_meta.iter().find(|m| m.path.ends_with("a.rs")).expect("file_a must have meta");
+        let b_meta = all_meta
+            .iter()
+            .find(|m| m.path.ends_with("b.rs"))
+            .expect("file_b must have meta");
+        let c_meta = all_meta
+            .iter()
+            .find(|m| m.path.ends_with("c.rs"))
+            .expect("file_c must have meta");
+        let d_meta = all_meta
+            .iter()
+            .find(|m| m.path.ends_with("d.rs"))
+            .expect("file_d must have meta");
+        let a_meta_stored = all_meta
+            .iter()
+            .find(|m| m.path.ends_with("a.rs"))
+            .expect("file_a must have meta");
 
         // B, C, D were not in the change set → their mtime in file_meta must
         // match the on-disk stat (unchanged), proving they were not re-parsed.
@@ -4281,7 +4714,11 @@ mod ram_path_fqn_tests {
             .take(0)
             .unwrap();
 
-        assert_eq!(rows.len(), 1, "exactly one calls edge expected, got {rows:?}");
+        assert_eq!(
+            rows.len(),
+            1,
+            "exactly one calls edge expected, got {rows:?}"
+        );
         let row = &rows[0];
         assert_eq!(
             row.in_name.as_deref(),
@@ -4329,4 +4766,3 @@ mod null_byte_skip_tests {
         assert!(matches!(output, ParseOutput::Parsed(_)));
     }
 }
-

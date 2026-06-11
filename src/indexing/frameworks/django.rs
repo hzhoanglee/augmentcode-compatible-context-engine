@@ -3,8 +3,8 @@
 //! Detection: Python files importing from `django`.
 //! Edge extraction: `path()` / `re_path()` calls in urls.py → edge to view function.
 
-use std::sync::LazyLock;
 use regex::Regex;
+use std::sync::LazyLock;
 
 use crate::indexing::frameworks::{DetectionContext, FrameworkResolver};
 use crate::parsing::relations::{EdgeKind, EdgeTarget, RawEdge};
@@ -15,15 +15,17 @@ pub struct DjangoResolver;
 /// Matches `path('route', views.handler_name)` or `path('route', handler_name)`
 static PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?:path|re_path)\s*\(\s*(?:'[^']*'|r'[^']*'|"[^"]*")\s*,\s*(?:views\.)?([a-zA-Z_]\w*)"#
-    ).unwrap()
+        r#"(?:path|re_path)\s*\(\s*(?:'[^']*'|r'[^']*'|"[^"]*")\s*,\s*(?:views\.)?([a-zA-Z_]\w*)"#,
+    )
+    .unwrap()
 });
 
 /// Matches class-based views: `path('route', MyView.as_view())`
 static CBV_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?:path|re_path)\s*\(\s*(?:'[^']*'|r'[^']*'|"[^"]*")\s*,\s*([A-Z]\w*)\.as_view\(\)"#
-    ).unwrap()
+        r#"(?:path|re_path)\s*\(\s*(?:'[^']*'|r'[^']*'|"[^"]*")\s*,\s*([A-Z]\w*)\.as_view\(\)"#,
+    )
+    .unwrap()
 });
 
 impl FrameworkResolver for DjangoResolver {
@@ -143,10 +145,13 @@ urlpatterns = [
 ]
 "#;
         let edges = DjangoResolver.extract_edges("app/urls.py", source, &[]);
-        let names: Vec<&str> = edges.iter().map(|e| match &e.to {
-            EdgeTarget::Unresolved { name, .. } => name.as_str(),
-            _ => "",
-        }).collect();
+        let names: Vec<&str> = edges
+            .iter()
+            .map(|e| match &e.to {
+                EdgeTarget::Unresolved { name, .. } => name.as_str(),
+                _ => "",
+            })
+            .collect();
         assert!(names.contains(&"user_list"));
         assert!(names.contains(&"user_detail"));
         assert!(names.contains(&"AdminView"));

@@ -6,7 +6,7 @@ pub mod symbols;
 use std::collections::HashMap;
 use std::path::Path;
 
-use tracing::{warn};
+use tracing::warn;
 use tree_sitter::{Node, Parser};
 
 use crate::parsing::chunker::{Chunk, chunk_file};
@@ -143,25 +143,20 @@ pub fn parse_file(file_path: &str, source: &str) -> ParseResult {
             (s, e, HashMap::new())
         }
         Lang::C => {
-            let (s, e, imp) = parse_with_tree_sitter_c_cpp(
-                file_path,
-                source,
-                tree_sitter_c::LANGUAGE.into(),
-            );
+            let (s, e, imp) =
+                parse_with_tree_sitter_c_cpp(file_path, source, tree_sitter_c::LANGUAGE.into());
             (s, e, imp)
         }
         Lang::Cpp => {
-            let (s, e, imp) = parse_with_tree_sitter_c_cpp(
-                file_path,
-                source,
-                tree_sitter_cpp::LANGUAGE.into(),
-            );
+            let (s, e, imp) =
+                parse_with_tree_sitter_c_cpp(file_path, source, tree_sitter_cpp::LANGUAGE.into());
             (s, e, imp)
         }
         Lang::Other => (vec![], vec![], HashMap::new()),
         Lang::CSharp => {
             let (s, e) = parse_with_tree_sitter(
-                file_path, source,
+                file_path,
+                source,
                 tree_sitter_c_sharp::LANGUAGE.into(),
                 extract_csharp,
             );
@@ -169,7 +164,8 @@ pub fn parse_file(file_path: &str, source: &str) -> ParseResult {
         }
         Lang::Php => {
             let (s, e) = parse_with_tree_sitter(
-                file_path, source,
+                file_path,
+                source,
                 tree_sitter_php::LANGUAGE_PHP.into(),
                 extract_php,
             );
@@ -177,7 +173,8 @@ pub fn parse_file(file_path: &str, source: &str) -> ParseResult {
         }
         Lang::Ruby => {
             let (s, e) = parse_with_tree_sitter(
-                file_path, source,
+                file_path,
+                source,
                 tree_sitter_ruby::LANGUAGE.into(),
                 extract_ruby,
             );
@@ -185,7 +182,8 @@ pub fn parse_file(file_path: &str, source: &str) -> ParseResult {
         }
         Lang::ObjectiveC => {
             let (s, e) = parse_with_tree_sitter(
-                file_path, source,
+                file_path,
+                source,
                 tree_sitter_objc::LANGUAGE.into(),
                 extract_objc,
             );
@@ -193,7 +191,8 @@ pub fn parse_file(file_path: &str, source: &str) -> ParseResult {
         }
         Lang::Swift => {
             let (s, e) = parse_with_tree_sitter(
-                file_path, source,
+                file_path,
+                source,
                 tree_sitter_swift::LANGUAGE.into(),
                 extract_swift,
             );
@@ -201,7 +200,8 @@ pub fn parse_file(file_path: &str, source: &str) -> ParseResult {
         }
         Lang::Kotlin => {
             let (s, e) = parse_with_tree_sitter(
-                file_path, source,
+                file_path,
+                source,
                 tree_sitter_kotlin_ng::LANGUAGE.into(),
                 extract_kotlin,
             );
@@ -209,7 +209,8 @@ pub fn parse_file(file_path: &str, source: &str) -> ParseResult {
         }
         Lang::Dart => {
             let (s, e) = parse_with_tree_sitter(
-                file_path, source,
+                file_path,
+                source,
                 tree_sitter_dart::LANGUAGE.into(),
                 extract_dart,
             );
@@ -217,7 +218,8 @@ pub fn parse_file(file_path: &str, source: &str) -> ParseResult {
         }
         Lang::Lua => {
             let (s, e) = parse_with_tree_sitter(
-                file_path, source,
+                file_path,
+                source,
                 tree_sitter_lua::LANGUAGE.into(),
                 extract_lua,
             );
@@ -225,7 +227,8 @@ pub fn parse_file(file_path: &str, source: &str) -> ParseResult {
         }
         Lang::Luau => {
             let (s, e) = parse_with_tree_sitter(
-                file_path, source,
+                file_path,
+                source,
                 tree_sitter_luau::LANGUAGE.into(),
                 extract_luau,
             );
@@ -237,7 +240,8 @@ pub fn parse_file(file_path: &str, source: &str) -> ParseResult {
         }
         Lang::Pascal => {
             let (s, e) = parse_with_tree_sitter(
-                file_path, source,
+                file_path,
+                source,
                 tree_sitter_pascal::LANGUAGE.into(),
                 extract_pascal,
             );
@@ -245,7 +249,8 @@ pub fn parse_file(file_path: &str, source: &str) -> ParseResult {
         }
         Lang::Liquid => {
             let (s, e) = parse_with_tree_sitter(
-                file_path, source,
+                file_path,
+                source,
                 tree_sitter_liquid::LANGUAGE.into(),
                 extract_liquid,
             );
@@ -302,7 +307,10 @@ fn parse_with_tree_sitter_c_cpp(
     match parser.parse(source, None) {
         Some(tree) => extract_c_cpp(file_path, source, &tree),
         None => {
-            warn!(file = file_path, "tree-sitter parse returned None for C/C++");
+            warn!(
+                file = file_path,
+                "tree-sitter parse returned None for C/C++"
+            );
             (vec![], vec![], HashMap::new())
         }
     }
@@ -349,7 +357,11 @@ fn make_symbol(
 
 // ─── Python extractor ─────────────────────────────────────────────────────
 
-fn extract_python(file: &str, source: &str, tree: &tree_sitter::Tree) -> (Vec<Symbol>, Vec<RawEdge>) {
+fn extract_python(
+    file: &str,
+    source: &str,
+    tree: &tree_sitter::Tree,
+) -> (Vec<Symbol>, Vec<RawEdge>) {
     let mut symbols = Vec::new();
     let mut edges = Vec::new();
     let root = tree.root_node();
@@ -370,11 +382,20 @@ fn extract_python_node(
         "function_definition" | "async_function_definition" => {
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = node_text(&name_node, source).to_string();
-                let kind = if !scope.is_empty() { SymbolKind::Method } else { SymbolKind::Function };
+                let kind = if !scope.is_empty() {
+                    SymbolKind::Method
+                } else {
+                    SymbolKind::Function
+                };
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), kind,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    kind,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -383,7 +404,15 @@ fn extract_python_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_python_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_python_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -391,9 +420,14 @@ fn extract_python_node(
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = node_text(&name_node, source).to_string();
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Class,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Class,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -402,7 +436,15 @@ fn extract_python_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_python_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_python_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -451,7 +493,11 @@ fn scope_to_qualified(file: &str, scope: &[String]) -> Option<QualifiedSymbol> {
 
 // ─── JavaScript extractor ─────────────────────────────────────────────────
 
-fn extract_javascript(file: &str, source: &str, tree: &tree_sitter::Tree) -> (Vec<Symbol>, Vec<RawEdge>) {
+fn extract_javascript(
+    file: &str,
+    source: &str,
+    tree: &tree_sitter::Tree,
+) -> (Vec<Symbol>, Vec<RawEdge>) {
     let mut symbols = Vec::new();
     let mut edges = Vec::new();
     let root = tree.root_node();
@@ -470,14 +516,24 @@ fn extract_js_node(
 ) {
     match node.kind() {
         "function_declaration" | "function" => {
-            let name = node.child_by_field_name("name")
+            let name = node
+                .child_by_field_name("name")
                 .map(|n| node_text(&n, source).to_string())
                 .unwrap_or_else(|| "<anonymous>".to_string());
-            let kind = if !scope.is_empty() { SymbolKind::Method } else { SymbolKind::Function };
+            let kind = if !scope.is_empty() {
+                SymbolKind::Method
+            } else {
+                SymbolKind::Function
+            };
             let sym = make_symbol(
-                file, &name, scope.to_vec(), kind,
-                node_line_start(node), node_line_end(node),
-                None, parent_fqn.map(|s| s.to_string()),
+                file,
+                &name,
+                scope.to_vec(),
+                kind,
+                node_line_start(node),
+                node_line_end(node),
+                None,
+                parent_fqn.map(|s| s.to_string()),
             );
             let fqn = sym.qualified.fqn();
             symbols.push(sym);
@@ -485,17 +541,31 @@ fn extract_js_node(
             child_scope.push(name);
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                extract_js_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                extract_js_node(
+                    file,
+                    source,
+                    &child,
+                    &child_scope,
+                    Some(&fqn),
+                    symbols,
+                    edges,
+                );
             }
         }
         "class_declaration" | "class" => {
-            let name = node.child_by_field_name("name")
+            let name = node
+                .child_by_field_name("name")
                 .map(|n| node_text(&n, source).to_string())
                 .unwrap_or_else(|| "<anonymous>".to_string());
             let sym = make_symbol(
-                file, &name, scope.to_vec(), SymbolKind::Class,
-                node_line_start(node), node_line_end(node),
-                None, parent_fqn.map(|s| s.to_string()),
+                file,
+                &name,
+                scope.to_vec(),
+                SymbolKind::Class,
+                node_line_start(node),
+                node_line_end(node),
+                None,
+                parent_fqn.map(|s| s.to_string()),
             );
             let fqn = sym.qualified.fqn();
             symbols.push(sym);
@@ -503,7 +573,15 @@ fn extract_js_node(
             child_scope.push(name);
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                extract_js_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                extract_js_node(
+                    file,
+                    source,
+                    &child,
+                    &child_scope,
+                    Some(&fqn),
+                    symbols,
+                    edges,
+                );
             }
         }
         "call_expression" => {
@@ -538,7 +616,11 @@ fn extract_js_node(
 
 // ─── TypeScript extractor ─────────────────────────────────────────────────
 
-fn extract_typescript(file: &str, source: &str, tree: &tree_sitter::Tree) -> (Vec<Symbol>, Vec<RawEdge>) {
+fn extract_typescript(
+    file: &str,
+    source: &str,
+    tree: &tree_sitter::Tree,
+) -> (Vec<Symbol>, Vec<RawEdge>) {
     // TypeScript grammar is a superset of JS grammar — reuse JS extractor.
     extract_javascript(file, source, tree)
 }
@@ -572,9 +654,14 @@ fn extract_rust_node(
                     SymbolKind::Function
                 };
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), kind,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    kind,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -582,7 +669,15 @@ fn extract_rust_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_rust_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_rust_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -590,9 +685,14 @@ fn extract_rust_node(
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = node_text(&name_node, source).to_string();
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Struct,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Struct,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 symbols.push(sym);
             }
@@ -601,9 +701,14 @@ fn extract_rust_node(
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = node_text(&name_node, source).to_string();
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Trait,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Trait,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -611,19 +716,33 @@ fn extract_rust_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_rust_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_rust_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
         "impl_item" => {
-            let type_name = node.child_by_field_name("type")
+            let type_name = node
+                .child_by_field_name("type")
                 .map(|n| node_text(&n, source).to_string())
                 .unwrap_or_else(|| "impl".to_string());
             let impl_name = format!("impl_{}", type_name);
             let sym = make_symbol(
-                file, &impl_name, scope.to_vec(), SymbolKind::Impl,
-                node_line_start(node), node_line_end(node),
-                None, parent_fqn.map(|s| s.to_string()),
+                file,
+                &impl_name,
+                scope.to_vec(),
+                SymbolKind::Impl,
+                node_line_start(node),
+                node_line_end(node),
+                None,
+                parent_fqn.map(|s| s.to_string()),
             );
             let fqn = sym.qualified.fqn();
             symbols.push(sym);
@@ -631,16 +750,29 @@ fn extract_rust_node(
             child_scope.push(impl_name);
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                extract_rust_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                extract_rust_node(
+                    file,
+                    source,
+                    &child,
+                    &child_scope,
+                    Some(&fqn),
+                    symbols,
+                    edges,
+                );
             }
         }
         "mod_item" => {
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = node_text(&name_node, source).to_string();
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Module,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Module,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -648,7 +780,15 @@ fn extract_rust_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_rust_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_rust_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -703,7 +843,8 @@ fn extract_go_node(
 ) {
     match node.kind() {
         "function_declaration" | "method_declaration" => {
-            let name = node.child_by_field_name("name")
+            let name = node
+                .child_by_field_name("name")
                 .map(|n| node_text(&n, source).to_string())
                 .unwrap_or_else(|| "<anon>".to_string());
             let kind = if node.kind() == "method_declaration" {
@@ -712,9 +853,14 @@ fn extract_go_node(
                 SymbolKind::Function
             };
             let sym = make_symbol(
-                file, &name, scope.to_vec(), kind,
-                node_line_start(node), node_line_end(node),
-                None, parent_fqn.map(|s| s.to_string()),
+                file,
+                &name,
+                scope.to_vec(),
+                kind,
+                node_line_start(node),
+                node_line_end(node),
+                None,
+                parent_fqn.map(|s| s.to_string()),
             );
             let fqn = sym.qualified.fqn();
             symbols.push(sym);
@@ -722,7 +868,15 @@ fn extract_go_node(
             child_scope.push(name);
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                extract_go_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                extract_go_node(
+                    file,
+                    source,
+                    &child,
+                    &child_scope,
+                    Some(&fqn),
+                    symbols,
+                    edges,
+                );
             }
         }
         "type_declaration" => {
@@ -733,9 +887,14 @@ fn extract_go_node(
                 {
                     let name = node_text(&name_node, source).to_string();
                     let sym = make_symbol(
-                        file, &name, scope.to_vec(), SymbolKind::Struct,
-                        node_line_start(&child), node_line_end(&child),
-                        None, parent_fqn.map(|s| s.to_string()),
+                        file,
+                        &name,
+                        scope.to_vec(),
+                        SymbolKind::Struct,
+                        node_line_start(&child),
+                        node_line_end(&child),
+                        None,
+                        parent_fqn.map(|s| s.to_string()),
                     );
                     symbols.push(sym);
                 }
@@ -800,9 +959,14 @@ fn extract_java_node(
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = node_text(&name_node, source).to_string();
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), kind,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    kind,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -810,7 +974,15 @@ fn extract_java_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_java_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_java_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -818,9 +990,14 @@ fn extract_java_node(
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = node_text(&name_node, source).to_string();
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Method,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Method,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -828,7 +1005,15 @@ fn extract_java_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_java_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_java_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -864,12 +1049,25 @@ fn extract_java_node(
 
 // ─── C / C++ extractor ────────────────────────────────────────────────────
 
-fn extract_c_cpp(file: &str, source: &str, tree: &tree_sitter::Tree) -> (Vec<Symbol>, Vec<RawEdge>, HashMap<String, String>) {
+fn extract_c_cpp(
+    file: &str,
+    source: &str,
+    tree: &tree_sitter::Tree,
+) -> (Vec<Symbol>, Vec<RawEdge>, HashMap<String, String>) {
     let mut symbols = Vec::new();
     let mut edges = Vec::new();
     let mut imports: HashMap<String, String> = HashMap::new();
     let root = tree.root_node();
-    extract_c_cpp_node(file, source, &root, &[], None, &mut symbols, &mut edges, &mut imports);
+    extract_c_cpp_node(
+        file,
+        source,
+        &root,
+        &[],
+        None,
+        &mut symbols,
+        &mut edges,
+        &mut imports,
+    );
     (symbols, edges, imports)
 }
 
@@ -944,7 +1142,9 @@ fn callee_leaf_name<'a>(func_node: &Node, source: &'a str) -> Option<&'a str> {
         "identifier" => Some(node_text(func_node, source)),
         "field_expression" => {
             // obj.method() or ptr->method() — the `field` child holds the method name.
-            func_node.child_by_field_name("field").map(|n| node_text(&n, source))
+            func_node
+                .child_by_field_name("field")
+                .map(|n| node_text(&n, source))
         }
         "qualified_identifier" => {
             // ns::Foo::bar() → recursively unwrap to the rightmost leaf identifier.
@@ -973,7 +1173,10 @@ fn include_basename(path: &str) -> &str {
     // Get the final component after the last `/`.
     let filename = path.rfind('/').map(|i| &path[i + 1..]).unwrap_or(path);
     // Strip the extension (last `.` and everything after).
-    filename.rfind('.').map(|i| &filename[..i]).unwrap_or(filename)
+    filename
+        .rfind('.')
+        .map(|i| &filename[..i])
+        .unwrap_or(filename)
 }
 
 /// For a qualified call `ns::Foo::method()`, extract the direct qualifier
@@ -1011,7 +1214,9 @@ fn extract_call_qualifier<'a>(func_node: &Node, source: &'a str) -> Option<&'a s
                     }
                     "qualified_identifier" => {
                         // Scope is also nested: get the name (rightmost) of the scope.
-                        scope_node.child_by_field_name("name").map(|n| node_text(&n, source))
+                        scope_node
+                            .child_by_field_name("name")
+                            .map(|n| node_text(&n, source))
                     }
                     _ => None,
                 }
@@ -1150,7 +1355,9 @@ fn extract_c_cpp_node(
             // Fallthrough: declarator not resolved — still recurse for nested nodes.
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                extract_c_cpp_node(file, source, &child, scope, parent_fqn, symbols, edges, imports);
+                extract_c_cpp_node(
+                    file, source, &child, scope, parent_fqn, symbols, edges, imports,
+                );
             }
         }
         "class_specifier" => {
@@ -1187,7 +1394,9 @@ fn extract_c_cpp_node(
                 // Anonymous class — still recurse without pushing scope.
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_c_cpp_node(file, source, &child, scope, parent_fqn, symbols, edges, imports);
+                    extract_c_cpp_node(
+                        file, source, &child, scope, parent_fqn, symbols, edges, imports,
+                    );
                 }
             }
         }
@@ -1224,7 +1433,9 @@ fn extract_c_cpp_node(
             } else {
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_c_cpp_node(file, source, &child, scope, parent_fqn, symbols, edges, imports);
+                    extract_c_cpp_node(
+                        file, source, &child, scope, parent_fqn, symbols, edges, imports,
+                    );
                 }
             }
         }
@@ -1272,7 +1483,8 @@ fn extract_c_cpp_node(
                 // (everything before the last ::) and check if any import's basename
                 // (without extension) matches it.
                 // For unqualified calls, check if <callee_name>.h matches any import basename.
-                let import_path = resolve_import_path_for_call(&func_node, source, callee_name, imports);
+                let import_path =
+                    resolve_import_path_for_call(&func_node, source, callee_name, imports);
 
                 edges.push(RawEdge {
                     from: from_sym,
@@ -1287,13 +1499,17 @@ fn extract_c_cpp_node(
             }
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                extract_c_cpp_node(file, source, &child, scope, parent_fqn, symbols, edges, imports);
+                extract_c_cpp_node(
+                    file, source, &child, scope, parent_fqn, symbols, edges, imports,
+                );
             }
         }
         _ => {
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                extract_c_cpp_node(file, source, &child, scope, parent_fqn, symbols, edges, imports);
+                extract_c_cpp_node(
+                    file, source, &child, scope, parent_fqn, symbols, edges, imports,
+                );
             }
         }
     }
@@ -1301,7 +1517,11 @@ fn extract_c_cpp_node(
 
 // ─── C# extractor ────────────────────────────────────────────────────────
 
-fn extract_csharp(file: &str, source: &str, tree: &tree_sitter::Tree) -> (Vec<Symbol>, Vec<RawEdge>) {
+fn extract_csharp(
+    file: &str,
+    source: &str,
+    tree: &tree_sitter::Tree,
+) -> (Vec<Symbol>, Vec<RawEdge>) {
     let mut symbols = Vec::new();
     let mut edges = Vec::new();
     let root = tree.root_node();
@@ -1322,11 +1542,20 @@ fn extract_csharp_node(
         "method_declaration" | "constructor_declaration" => {
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = node_text(&name_node, source).to_string();
-                let kind = if !scope.is_empty() { SymbolKind::Method } else { SymbolKind::Function };
+                let kind = if !scope.is_empty() {
+                    SymbolKind::Method
+                } else {
+                    SymbolKind::Function
+                };
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), kind,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    kind,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -1334,7 +1563,15 @@ fn extract_csharp_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_csharp_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_csharp_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -1342,9 +1579,14 @@ fn extract_csharp_node(
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = node_text(&name_node, source).to_string();
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Class,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Class,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -1352,7 +1594,15 @@ fn extract_csharp_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_csharp_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_csharp_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -1360,9 +1610,14 @@ fn extract_csharp_node(
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = node_text(&name_node, source).to_string();
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Struct,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Struct,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -1370,7 +1625,15 @@ fn extract_csharp_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_csharp_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_csharp_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -1378,9 +1641,14 @@ fn extract_csharp_node(
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = node_text(&name_node, source).to_string();
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Interface,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Interface,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -1388,7 +1656,15 @@ fn extract_csharp_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_csharp_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_csharp_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -1396,9 +1672,14 @@ fn extract_csharp_node(
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = node_text(&name_node, source).to_string();
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Enum,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Enum,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -1406,7 +1687,15 @@ fn extract_csharp_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_csharp_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_csharp_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -1414,9 +1703,14 @@ fn extract_csharp_node(
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = node_text(&name_node, source).to_string();
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Module,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Module,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -1424,7 +1718,15 @@ fn extract_csharp_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_csharp_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_csharp_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -1481,11 +1783,20 @@ fn extract_php_node(
         "function_definition" | "method_declaration" => {
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = node_text(&name_node, source).to_string();
-                let kind = if !scope.is_empty() { SymbolKind::Method } else { SymbolKind::Function };
+                let kind = if !scope.is_empty() {
+                    SymbolKind::Method
+                } else {
+                    SymbolKind::Function
+                };
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), kind,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    kind,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -1493,7 +1804,15 @@ fn extract_php_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_php_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_php_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -1501,9 +1820,14 @@ fn extract_php_node(
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = node_text(&name_node, source).to_string();
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Class,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Class,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -1511,7 +1835,15 @@ fn extract_php_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_php_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_php_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -1519,9 +1851,14 @@ fn extract_php_node(
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = node_text(&name_node, source).to_string();
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Interface,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Interface,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -1529,7 +1866,15 @@ fn extract_php_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_php_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_php_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -1537,9 +1882,14 @@ fn extract_php_node(
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = node_text(&name_node, source).to_string();
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Trait,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Trait,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -1547,7 +1897,15 @@ fn extract_php_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_php_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_php_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -1555,9 +1913,14 @@ fn extract_php_node(
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = node_text(&name_node, source).to_string();
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Module,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Module,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -1565,7 +1928,15 @@ fn extract_php_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_php_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_php_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -1573,9 +1944,14 @@ fn extract_php_node(
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = node_text(&name_node, source).to_string();
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Enum,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Enum,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -1583,7 +1959,15 @@ fn extract_php_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_php_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_php_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -1682,11 +2066,20 @@ fn extract_ruby_node(
         "method" | "singleton_method" => {
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = node_text(&name_node, source).to_string();
-                let kind = if !scope.is_empty() { SymbolKind::Method } else { SymbolKind::Function };
+                let kind = if !scope.is_empty() {
+                    SymbolKind::Method
+                } else {
+                    SymbolKind::Function
+                };
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), kind,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    kind,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -1694,7 +2087,15 @@ fn extract_ruby_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_ruby_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_ruby_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -1702,9 +2103,14 @@ fn extract_ruby_node(
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = node_text(&name_node, source).to_string();
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Class,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Class,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -1712,7 +2118,15 @@ fn extract_ruby_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_ruby_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_ruby_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -1720,9 +2134,14 @@ fn extract_ruby_node(
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = node_text(&name_node, source).to_string();
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Module,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Module,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -1730,7 +2149,15 @@ fn extract_ruby_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_ruby_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_ruby_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -1799,7 +2226,11 @@ fn objc_method_selector(node: &Node, source: &str) -> Option<String> {
             _ => {}
         }
     }
-    if parts.is_empty() { None } else { Some(parts.join("")) }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(""))
+    }
 }
 
 /// Extract callee selector from a message_expression.
@@ -1843,11 +2274,20 @@ fn extract_objc_node(
     match node.kind() {
         "method_definition" => {
             if let Some(sel) = objc_method_selector(node, source) {
-                let kind = if !scope.is_empty() { SymbolKind::Method } else { SymbolKind::Function };
+                let kind = if !scope.is_empty() {
+                    SymbolKind::Method
+                } else {
+                    SymbolKind::Function
+                };
                 let sym = make_symbol(
-                    file, &sel, scope.to_vec(), kind,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &sel,
+                    scope.to_vec(),
+                    kind,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -1855,21 +2295,35 @@ fn extract_objc_node(
                 child_scope.push(sel);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_objc_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_objc_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
         "class_interface" => {
             // First named child that is an identifier is the class name
             let mut cursor = node.walk();
-            let name = node.children(&mut cursor)
+            let name = node
+                .children(&mut cursor)
                 .find(|c| c.kind() == "identifier")
                 .map(|c| node_text(&c, source).to_string());
             if let Some(name) = name {
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Class,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Class,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -1877,20 +2331,34 @@ fn extract_objc_node(
                 child_scope.push(name);
                 let mut cursor2 = node.walk();
                 for child in node.children(&mut cursor2) {
-                    extract_objc_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_objc_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
         "protocol_declaration" => {
             let mut cursor = node.walk();
-            let name = node.children(&mut cursor)
+            let name = node
+                .children(&mut cursor)
                 .find(|c| c.kind() == "identifier")
                 .map(|c| node_text(&c, source).to_string());
             if let Some(name) = name {
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Interface,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Interface,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -1898,7 +2366,15 @@ fn extract_objc_node(
                 child_scope.push(name);
                 let mut cursor2 = node.walk();
                 for child in node.children(&mut cursor2) {
-                    extract_objc_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_objc_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -1933,7 +2409,11 @@ fn extract_objc_node(
 
 // ─── Swift extractor ─────────────────────────────────────────────────────
 
-fn extract_swift(file: &str, source: &str, tree: &tree_sitter::Tree) -> (Vec<Symbol>, Vec<RawEdge>) {
+fn extract_swift(
+    file: &str,
+    source: &str,
+    tree: &tree_sitter::Tree,
+) -> (Vec<Symbol>, Vec<RawEdge>) {
     let mut symbols = Vec::new();
     let mut edges = Vec::new();
     let root = tree.root_node();
@@ -1954,15 +2434,25 @@ fn extract_swift_node(
         "function_declaration" | "init_declaration" => {
             // Name is a positional simple_identifier child
             let mut cursor = node.walk();
-            let name = node.children(&mut cursor)
+            let name = node
+                .children(&mut cursor)
                 .find(|c| c.kind() == "simple_identifier")
                 .map(|c| node_text(&c, source).to_string())
                 .unwrap_or_else(|| "init".to_string());
-            let kind = if !scope.is_empty() { SymbolKind::Method } else { SymbolKind::Function };
+            let kind = if !scope.is_empty() {
+                SymbolKind::Method
+            } else {
+                SymbolKind::Function
+            };
             let sym = make_symbol(
-                file, &name, scope.to_vec(), kind,
-                node_line_start(node), node_line_end(node),
-                None, parent_fqn.map(|s| s.to_string()),
+                file,
+                &name,
+                scope.to_vec(),
+                kind,
+                node_line_start(node),
+                node_line_end(node),
+                None,
+                parent_fqn.map(|s| s.to_string()),
             );
             let fqn = sym.qualified.fqn();
             symbols.push(sym);
@@ -1970,7 +2460,15 @@ fn extract_swift_node(
             child_scope.push(name);
             let mut cursor2 = node.walk();
             for child in node.children(&mut cursor2) {
-                extract_swift_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                extract_swift_node(
+                    file,
+                    source,
+                    &child,
+                    &child_scope,
+                    Some(&fqn),
+                    symbols,
+                    edges,
+                );
             }
         }
         "class_declaration" => {
@@ -1996,9 +2494,14 @@ fn extract_swift_node(
                     _ => SymbolKind::Class,
                 };
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), kind,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    kind,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -2006,20 +2509,34 @@ fn extract_swift_node(
                 child_scope.push(name);
                 let mut cursor2 = node.walk();
                 for child in node.children(&mut cursor2) {
-                    extract_swift_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_swift_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
         "protocol_declaration" => {
             let mut cursor = node.walk();
-            let name = node.children(&mut cursor)
+            let name = node
+                .children(&mut cursor)
                 .find(|c| c.kind() == "type_identifier")
                 .map(|c| node_text(&c, source).to_string());
             if let Some(name) = name {
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Interface,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Interface,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -2027,7 +2544,15 @@ fn extract_swift_node(
                 child_scope.push(name);
                 let mut cursor2 = node.walk();
                 for child in node.children(&mut cursor2) {
-                    extract_swift_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_swift_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -2064,7 +2589,11 @@ fn extract_swift_node(
 
 // ─── Kotlin extractor ────────────────────────────────────────────────────
 
-fn extract_kotlin(file: &str, source: &str, tree: &tree_sitter::Tree) -> (Vec<Symbol>, Vec<RawEdge>) {
+fn extract_kotlin(
+    file: &str,
+    source: &str,
+    tree: &tree_sitter::Tree,
+) -> (Vec<Symbol>, Vec<RawEdge>) {
     let mut symbols = Vec::new();
     let mut edges = Vec::new();
     let root = tree.root_node();
@@ -2085,15 +2614,25 @@ fn extract_kotlin_node(
         "function_declaration" => {
             // Name is a positional identifier child
             let mut cursor = node.walk();
-            let name = node.children(&mut cursor)
+            let name = node
+                .children(&mut cursor)
                 .find(|c| c.kind() == "identifier")
                 .map(|c| node_text(&c, source).to_string());
             if let Some(name) = name {
-                let kind = if !scope.is_empty() { SymbolKind::Method } else { SymbolKind::Function };
+                let kind = if !scope.is_empty() {
+                    SymbolKind::Method
+                } else {
+                    SymbolKind::Function
+                };
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), kind,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    kind,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -2101,7 +2640,15 @@ fn extract_kotlin_node(
                 child_scope.push(name);
                 let mut cursor2 = node.walk();
                 for child in node.children(&mut cursor2) {
-                    extract_kotlin_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_kotlin_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -2131,9 +2678,14 @@ fn extract_kotlin_node(
             }
             if let Some(name) = name_opt {
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), kind,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    kind,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -2141,20 +2693,34 @@ fn extract_kotlin_node(
                 child_scope.push(name);
                 let mut cursor2 = node.walk();
                 for child in node.children(&mut cursor2) {
-                    extract_kotlin_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_kotlin_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
         "object_declaration" => {
             let mut cursor = node.walk();
-            let name = node.children(&mut cursor)
+            let name = node
+                .children(&mut cursor)
                 .find(|c| c.kind() == "identifier")
                 .map(|c| node_text(&c, source).to_string());
             if let Some(name) = name {
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Class,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Class,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -2162,14 +2728,23 @@ fn extract_kotlin_node(
                 child_scope.push(name);
                 let mut cursor2 = node.walk();
                 for child in node.children(&mut cursor2) {
-                    extract_kotlin_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_kotlin_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
         "call_expression" => {
             // First non-call_suffix child is the callee
             let mut cursor = node.walk();
-            let callee = node.children(&mut cursor)
+            let callee = node
+                .children(&mut cursor)
                 .find(|c| c.kind() != "call_suffix")
                 .map(|c| node_text(&c, source).to_string());
             if let Some(callee_name) = callee
@@ -2258,11 +2833,20 @@ fn extract_dart_node(
             // Look for identifier in the method_signature/function_signature child, or directly
             let name = dart_find_function_name(node, source);
             if let Some(name) = name {
-                let kind = if !scope.is_empty() { SymbolKind::Method } else { SymbolKind::Function };
+                let kind = if !scope.is_empty() {
+                    SymbolKind::Method
+                } else {
+                    SymbolKind::Function
+                };
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), kind,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    kind,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -2270,7 +2854,15 @@ fn extract_dart_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_dart_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_dart_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             } else {
                 // Still recurse even if we couldn't find the name
@@ -2283,14 +2875,20 @@ fn extract_dart_node(
         "class_declaration" => {
             // Positional identifier child
             let mut cursor = node.walk();
-            let name = node.children(&mut cursor)
+            let name = node
+                .children(&mut cursor)
                 .find(|c| c.kind() == "identifier")
                 .map(|c| node_text(&c, source).to_string());
             if let Some(name) = name {
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Class,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Class,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -2298,20 +2896,34 @@ fn extract_dart_node(
                 child_scope.push(name);
                 let mut cursor2 = node.walk();
                 for child in node.children(&mut cursor2) {
-                    extract_dart_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_dart_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
         "enum_declaration" => {
             let mut cursor = node.walk();
-            let name = node.children(&mut cursor)
+            let name = node
+                .children(&mut cursor)
                 .find(|c| c.kind() == "identifier")
                 .map(|c| node_text(&c, source).to_string());
             if let Some(name) = name {
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Enum,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Enum,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -2319,20 +2931,34 @@ fn extract_dart_node(
                 child_scope.push(name);
                 let mut cursor2 = node.walk();
                 for child in node.children(&mut cursor2) {
-                    extract_dart_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_dart_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
         "mixin_declaration" => {
             let mut cursor = node.walk();
-            let name = node.children(&mut cursor)
+            let name = node
+                .children(&mut cursor)
                 .find(|c| c.kind() == "identifier")
                 .map(|c| node_text(&c, source).to_string());
             if let Some(name) = name {
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Class,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Class,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -2340,7 +2966,15 @@ fn extract_dart_node(
                 child_scope.push(name);
                 let mut cursor2 = node.walk();
                 for child in node.children(&mut cursor2) {
-                    extract_dart_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_dart_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -2384,7 +3018,9 @@ fn extract_dart_node(
             // Detect top-level function calls: identifier immediately followed by arguments
             if node.kind() == "identifier"
                 && let Some(next) = node.next_sibling()
-                && (next.kind() == "selector" || next.kind() == "argument_part" || next.kind() == "arguments")
+                && (next.kind() == "selector"
+                    || next.kind() == "argument_part"
+                    || next.kind() == "arguments")
                 && let Some(from_sym) = scope_to_qualified(file, scope)
             {
                 let callee_name = node_text(node, source).to_string();
@@ -2431,19 +3067,29 @@ fn extract_lua_node(
             if let Some(name_node) = node.child_by_field_name("name") {
                 let (name, kind) = if name_node.kind() == "method_index_expression" {
                     // Colon syntax: obj:method — extract the method field
-                    let method = name_node.child_by_field_name("method")
+                    let method = name_node
+                        .child_by_field_name("method")
                         .map(|m| node_text(&m, source).to_string())
                         .unwrap_or_else(|| node_text(&name_node, source).to_string());
                     (method, SymbolKind::Method)
                 } else {
                     let name = node_text(&name_node, source).to_string();
-                    let kind = if !scope.is_empty() { SymbolKind::Method } else { SymbolKind::Function };
+                    let kind = if !scope.is_empty() {
+                        SymbolKind::Method
+                    } else {
+                        SymbolKind::Function
+                    };
                     (name, kind)
                 };
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), kind,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    kind,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -2451,7 +3097,15 @@ fn extract_lua_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_lua_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_lua_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -2459,7 +3113,8 @@ fn extract_lua_node(
             // field "name" — could be method_index_expression for colon calls
             if let Some(name_node) = node.child_by_field_name("name") {
                 let callee_name = if name_node.kind() == "method_index_expression" {
-                    name_node.child_by_field_name("method")
+                    name_node
+                        .child_by_field_name("method")
                         .map(|m| node_text(&m, source).to_string())
                         .unwrap_or_else(|| node_text(&name_node, source).to_string())
                 } else {
@@ -2515,19 +3170,29 @@ fn extract_luau_node(
         "function_declaration" => {
             if let Some(name_node) = node.child_by_field_name("name") {
                 let (name, kind) = if name_node.kind() == "method_index_expression" {
-                    let method = name_node.child_by_field_name("method")
+                    let method = name_node
+                        .child_by_field_name("method")
                         .map(|m| node_text(&m, source).to_string())
                         .unwrap_or_else(|| node_text(&name_node, source).to_string());
                     (method, SymbolKind::Method)
                 } else {
                     let name = node_text(&name_node, source).to_string();
-                    let kind = if !scope.is_empty() { SymbolKind::Method } else { SymbolKind::Function };
+                    let kind = if !scope.is_empty() {
+                        SymbolKind::Method
+                    } else {
+                        SymbolKind::Function
+                    };
                     (name, kind)
                 };
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), kind,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    kind,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -2535,7 +3200,15 @@ fn extract_luau_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_luau_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_luau_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -2543,9 +3216,14 @@ fn extract_luau_node(
             if let Some(name_node) = node.child_by_field_name("name") {
                 let name = node_text(&name_node, source).to_string();
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), SymbolKind::Struct,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    SymbolKind::Struct,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 symbols.push(sym);
             }
@@ -2553,7 +3231,8 @@ fn extract_luau_node(
         "function_call" => {
             if let Some(name_node) = node.child_by_field_name("name") {
                 let callee_name = if name_node.kind() == "method_index_expression" {
-                    name_node.child_by_field_name("method")
+                    name_node
+                        .child_by_field_name("method")
                         .map(|m| node_text(&m, source).to_string())
                         .unwrap_or_else(|| node_text(&name_node, source).to_string())
                 } else {
@@ -2588,7 +3267,11 @@ fn extract_luau_node(
 
 // ─── Pascal extractor ────────────────────────────────────────────────────
 
-fn extract_pascal(file: &str, source: &str, tree: &tree_sitter::Tree) -> (Vec<Symbol>, Vec<RawEdge>) {
+fn extract_pascal(
+    file: &str,
+    source: &str,
+    tree: &tree_sitter::Tree,
+) -> (Vec<Symbol>, Vec<RawEdge>) {
     let mut symbols = Vec::new();
     let mut edges = Vec::new();
     let root = tree.root_node();
@@ -2608,15 +3291,25 @@ fn extract_pascal_node(
     match node.kind() {
         "defProc" => {
             // field "header" → declProc → field "name"
-            let name = node.child_by_field_name("header")
+            let name = node
+                .child_by_field_name("header")
                 .and_then(|h| h.child_by_field_name("name"))
                 .map(|n| node_text(&n, source).to_string());
             if let Some(name) = name {
-                let kind = if !scope.is_empty() { SymbolKind::Method } else { SymbolKind::Function };
+                let kind = if !scope.is_empty() {
+                    SymbolKind::Method
+                } else {
+                    SymbolKind::Function
+                };
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), kind,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    kind,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -2624,13 +3317,22 @@ fn extract_pascal_node(
                 child_scope.push(name);
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    extract_pascal_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_pascal_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
         "declType" => {
             // field "name" on declType gives the type name
-            let name = node.child_by_field_name("name")
+            let name = node
+                .child_by_field_name("name")
                 .map(|n| node_text(&n, source).to_string());
             if let Some(name) = name {
                 // Determine kind from child: declClass → Class, declIntf → Interface
@@ -2638,15 +3340,26 @@ fn extract_pascal_node(
                 let mut kind = SymbolKind::Class;
                 for child in node.children(&mut cursor) {
                     match child.kind() {
-                        "declClass" => { kind = SymbolKind::Class; break; }
-                        "declIntf" => { kind = SymbolKind::Interface; break; }
+                        "declClass" => {
+                            kind = SymbolKind::Class;
+                            break;
+                        }
+                        "declIntf" => {
+                            kind = SymbolKind::Interface;
+                            break;
+                        }
                         _ => {}
                     }
                 }
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), kind,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    kind,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -2654,7 +3367,15 @@ fn extract_pascal_node(
                 child_scope.push(name);
                 let mut cursor2 = node.walk();
                 for child in node.children(&mut cursor2) {
-                    extract_pascal_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_pascal_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             }
         }
@@ -2707,7 +3428,13 @@ fn extract_svelte(file: &str, source: &str) -> (Vec<Symbol>, Vec<RawEdge>) {
     let mut all_edges = Vec::new();
 
     // Walk the tree looking for script_element nodes
-    find_svelte_scripts(&tree.root_node(), file, source, &mut all_symbols, &mut all_edges);
+    find_svelte_scripts(
+        &tree.root_node(),
+        file,
+        source,
+        &mut all_symbols,
+        &mut all_edges,
+    );
 
     (all_symbols, all_edges)
 }
@@ -2782,7 +3509,11 @@ fn find_svelte_scripts(
 
 // ─── Liquid extractor ────────────────────────────────────────────────────
 
-fn extract_liquid(file: &str, source: &str, tree: &tree_sitter::Tree) -> (Vec<Symbol>, Vec<RawEdge>) {
+fn extract_liquid(
+    file: &str,
+    source: &str,
+    tree: &tree_sitter::Tree,
+) -> (Vec<Symbol>, Vec<RawEdge>) {
     let mut symbols = Vec::new();
     let mut edges = Vec::new();
     let root = tree.root_node();
@@ -2804,15 +3535,21 @@ fn extract_liquid_node(
         "tag_assign" | "tag_capture" | "tag_for" | "tag_if" => {
             // Look for the first identifier child as the "name" of this construct
             let mut cursor = node.walk();
-            let name = node.children(&mut cursor)
+            let name = node
+                .children(&mut cursor)
                 .find(|c| c.kind() == "identifier")
                 .map(|c| node_text(&c, source).to_string());
             if let Some(name) = name {
                 let kind = SymbolKind::Function;
                 let sym = make_symbol(
-                    file, &name, scope.to_vec(), kind,
-                    node_line_start(node), node_line_end(node),
-                    None, parent_fqn.map(|s| s.to_string()),
+                    file,
+                    &name,
+                    scope.to_vec(),
+                    kind,
+                    node_line_start(node),
+                    node_line_end(node),
+                    None,
+                    parent_fqn.map(|s| s.to_string()),
                 );
                 let fqn = sym.qualified.fqn();
                 symbols.push(sym);
@@ -2820,7 +3557,15 @@ fn extract_liquid_node(
                 child_scope.push(name);
                 let mut cursor2 = node.walk();
                 for child in node.children(&mut cursor2) {
-                    extract_liquid_node(file, source, &child, &child_scope, Some(&fqn), symbols, edges);
+                    extract_liquid_node(
+                        file,
+                        source,
+                        &child,
+                        &child_scope,
+                        Some(&fqn),
+                        symbols,
+                        edges,
+                    );
                 }
             } else {
                 let mut cursor2 = node.walk();
@@ -2865,8 +3610,8 @@ fn extract_liquid_node(
 #[cfg(test)]
 mod cpp_tests {
     use super::*;
+    use crate::parsing::relations::{EdgeKind, EdgeTarget};
     use crate::parsing::symbols::SymbolKind;
-    use crate::parsing::relations::{EdgeTarget, EdgeKind};
 
     /// Helper: parse C++ source and return the ParseResult.
     fn parse_cpp(source: &str) -> ParseResult {
@@ -2887,12 +3632,23 @@ int add(int a, int b) {
         let syms = &result.symbols;
         assert!(!syms.is_empty(), "expected at least one symbol");
         let func = syms.iter().find(|s| s.qualified.name == "add");
-        assert!(func.is_some(), "expected symbol named 'add'; got: {:?}", syms.iter().map(|s| &s.qualified.name).collect::<Vec<_>>());
+        assert!(
+            func.is_some(),
+            "expected symbol named 'add'; got: {:?}",
+            syms.iter().map(|s| &s.qualified.name).collect::<Vec<_>>()
+        );
         let func = func.unwrap();
         assert_eq!(func.kind, SymbolKind::Function, "add must be Function kind");
-        assert_eq!(func.qualified.scope_path, Vec::<String>::new(), "add must have empty scope_path at file level");
+        assert_eq!(
+            func.qualified.scope_path,
+            Vec::<String>::new(),
+            "add must have empty scope_path at file level"
+        );
         assert!(func.line_start >= 1, "line_start must be >= 1");
-        assert!(func.line_end >= func.line_start, "line_end must be >= line_start");
+        assert!(
+            func.line_end >= func.line_start,
+            "line_end must be >= line_start"
+        );
     }
 
     // ─── Test 3.2: Nested namespace scope_path ────────────────────────────
@@ -2910,16 +3666,22 @@ namespace outer {
         let result = parse_cpp(src);
         let syms = &result.symbols;
         let foo = syms.iter().find(|s| s.qualified.name == "foo");
-        assert!(foo.is_some(), "expected symbol 'foo'; got: {:?}", syms.iter().map(|s| &s.qualified.name).collect::<Vec<_>>());
+        assert!(
+            foo.is_some(),
+            "expected symbol 'foo'; got: {:?}",
+            syms.iter().map(|s| &s.qualified.name).collect::<Vec<_>>()
+        );
         let foo = foo.unwrap();
         // scope_path should contain ["outer", "inner"] (the namespace names pushed by namespace_definition)
         assert!(
             foo.qualified.scope_path.contains(&"outer".to_string()),
-            "scope_path must contain 'outer'; got: {:?}", foo.qualified.scope_path
+            "scope_path must contain 'outer'; got: {:?}",
+            foo.qualified.scope_path
         );
         assert!(
             foo.qualified.scope_path.contains(&"inner".to_string()),
-            "scope_path must contain 'inner'; got: {:?}", foo.qualified.scope_path
+            "scope_path must contain 'inner'; got: {:?}",
+            foo.qualified.scope_path
         );
     }
 
@@ -2945,13 +3707,29 @@ void Foo::bar() {
 
         // inline_method inside the class should be Method
         let inline_m = syms.iter().find(|s| s.qualified.name == "inline_method");
-        assert!(inline_m.is_some(), "expected 'inline_method'; symbols: {:?}", syms.iter().map(|s| &s.qualified.name).collect::<Vec<_>>());
-        assert_eq!(inline_m.unwrap().kind, SymbolKind::Method, "inline_method must be Method");
+        assert!(
+            inline_m.is_some(),
+            "expected 'inline_method'; symbols: {:?}",
+            syms.iter().map(|s| &s.qualified.name).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            inline_m.unwrap().kind,
+            SymbolKind::Method,
+            "inline_method must be Method"
+        );
 
         // out-of-line Foo::bar() must also be Method
         let bar = syms.iter().find(|s| s.qualified.name == "bar");
-        assert!(bar.is_some(), "expected 'bar'; symbols: {:?}", syms.iter().map(|s| &s.qualified.name).collect::<Vec<_>>());
-        assert_eq!(bar.unwrap().kind, SymbolKind::Method, "Foo::bar must be Method (out-of-line)");
+        assert!(
+            bar.is_some(),
+            "expected 'bar'; symbols: {:?}",
+            syms.iter().map(|s| &s.qualified.name).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            bar.unwrap().kind,
+            SymbolKind::Method,
+            "Foo::bar must be Method (out-of-line)"
+        );
     }
 
     // ─── Test 3.4: Call edge from A to B ──────────────────────────────────
@@ -2977,7 +3755,11 @@ void a_func() {
         assert!(
             edge.is_some(),
             "expected edge from a_func to b_func; edges: {:?}",
-            result.edges.iter().map(|e| (&e.from.name, &e.to)).collect::<Vec<_>>()
+            result
+                .edges
+                .iter()
+                .map(|e| (&e.from.name, &e.to))
+                .collect::<Vec<_>>()
         );
         let edge = edge.unwrap();
         assert_eq!(edge.kind, EdgeKind::Calls, "edge kind must be Calls");
@@ -2999,11 +3781,13 @@ void foo() {}
         let imp = &result.imports;
         assert!(
             imp.contains_key("linux/list.h"),
-            "imports must contain 'linux/list.h'; got: {:?}", imp.keys().collect::<Vec<_>>()
+            "imports must contain 'linux/list.h'; got: {:?}",
+            imp.keys().collect::<Vec<_>>()
         );
         assert!(
             imp.contains_key("local.h"),
-            "imports must contain 'local.h'; got: {:?}", imp.keys().collect::<Vec<_>>()
+            "imports must contain 'local.h'; got: {:?}",
+            imp.keys().collect::<Vec<_>>()
         );
     }
 
@@ -3062,25 +3846,32 @@ void caller() {
 }
 "#;
         let result = parse_cpp(src);
-        let callee_names: Vec<&str> = result.edges.iter().filter_map(|e| {
-            if let EdgeTarget::Unresolved { name, .. } = &e.to {
-                Some(name.as_str())
-            } else {
-                None
-            }
-        }).collect();
+        let callee_names: Vec<&str> = result
+            .edges
+            .iter()
+            .filter_map(|e| {
+                if let EdgeTarget::Unresolved { name, .. } = &e.to {
+                    Some(name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         assert!(
             callee_names.contains(&"method"),
-            "expected callee 'method' (from ns::Foo::method()); got: {:?}", callee_names
+            "expected callee 'method' (from ns::Foo::method()); got: {:?}",
+            callee_names
         );
         assert!(
             callee_names.contains(&"field_method"),
-            "expected callee 'field_method' (from obj.field_method()); got: {:?}", callee_names
+            "expected callee 'field_method' (from obj.field_method()); got: {:?}",
+            callee_names
         );
         assert!(
             callee_names.contains(&"ptr_method"),
-            "expected callee 'ptr_method' (from ptr->ptr_method()); got: {:?}", callee_names
+            "expected callee 'ptr_method' (from ptr->ptr_method()); got: {:?}",
+            callee_names
         );
     }
 }
@@ -3107,11 +3898,17 @@ namespace MyApp {
         assert!(ns.is_some(), "expected namespace MyApp");
         assert_eq!(ns.unwrap().kind, SymbolKind::Module);
 
-        let cls = result.symbols.iter().find(|s| s.qualified.name == "Greeter");
+        let cls = result
+            .symbols
+            .iter()
+            .find(|s| s.qualified.name == "Greeter");
         assert!(cls.is_some(), "expected class Greeter");
         assert_eq!(cls.unwrap().kind, SymbolKind::Class);
 
-        let method = result.symbols.iter().find(|s| s.qualified.name == "SayHello");
+        let method = result
+            .symbols
+            .iter()
+            .find(|s| s.qualified.name == "SayHello");
         assert!(method.is_some(), "expected method SayHello");
         assert_eq!(method.unwrap().kind, SymbolKind::Method);
     }
@@ -3125,7 +3922,10 @@ interface IService {
 enum Color { Red, Green, Blue }
 "#;
         let result = parse_file("test.cs", src);
-        let iface = result.symbols.iter().find(|s| s.qualified.name == "IService");
+        let iface = result
+            .symbols
+            .iter()
+            .find(|s| s.qualified.name == "IService");
         assert!(iface.is_some(), "expected interface IService");
         assert_eq!(iface.unwrap().kind, SymbolKind::Interface);
 
@@ -3147,9 +3947,15 @@ class Foo {
         let edge = result.edges.iter().find(|e| {
             if let EdgeTarget::Unresolved { name, .. } = &e.to {
                 name.contains("Baz")
-            } else { false }
+            } else {
+                false
+            }
         });
-        assert!(edge.is_some(), "expected call edge to Baz; edges: {:?}", result.edges);
+        assert!(
+            edge.is_some(),
+            "expected call edge to Baz; edges: {:?}",
+            result.edges
+        );
     }
 }
 
@@ -3169,14 +3975,28 @@ class UserService {
 "#;
         let result = parse_file("test.php", src);
         let ns = result.symbols.iter().find(|s| s.qualified.name == "App");
-        assert!(ns.is_some(), "expected namespace App; syms: {:?}", result.symbols.iter().map(|s| &s.qualified.name).collect::<Vec<_>>());
+        assert!(
+            ns.is_some(),
+            "expected namespace App; syms: {:?}",
+            result
+                .symbols
+                .iter()
+                .map(|s| &s.qualified.name)
+                .collect::<Vec<_>>()
+        );
         assert_eq!(ns.unwrap().kind, SymbolKind::Module);
 
-        let cls = result.symbols.iter().find(|s| s.qualified.name == "UserService");
+        let cls = result
+            .symbols
+            .iter()
+            .find(|s| s.qualified.name == "UserService");
         assert!(cls.is_some(), "expected class UserService");
         assert_eq!(cls.unwrap().kind, SymbolKind::Class);
 
-        let method = result.symbols.iter().find(|s| s.qualified.name == "getUser");
+        let method = result
+            .symbols
+            .iter()
+            .find(|s| s.qualified.name == "getUser");
         assert!(method.is_some(), "expected method getUser");
         assert_eq!(method.unwrap().kind, SymbolKind::Method);
     }
@@ -3189,11 +4009,17 @@ trait Loggable {}
 enum Status { case Active; case Inactive; }
 "#;
         let result = parse_file("test.php", src);
-        let iface = result.symbols.iter().find(|s| s.qualified.name == "Cacheable");
+        let iface = result
+            .symbols
+            .iter()
+            .find(|s| s.qualified.name == "Cacheable");
         assert!(iface.is_some(), "expected interface Cacheable");
         assert_eq!(iface.unwrap().kind, SymbolKind::Interface);
 
-        let tr = result.symbols.iter().find(|s| s.qualified.name == "Loggable");
+        let tr = result
+            .symbols
+            .iter()
+            .find(|s| s.qualified.name == "Loggable");
         assert!(tr.is_some(), "expected trait Loggable");
         assert_eq!(tr.unwrap().kind, SymbolKind::Trait);
 
@@ -3214,11 +4040,19 @@ class Foo {
 "#;
         let result = parse_file("test.php", src);
         let baz_edge = result.edges.iter().find(|e| {
-            if let EdgeTarget::Unresolved { name, .. } = &e.to { name == "baz" } else { false }
+            if let EdgeTarget::Unresolved { name, .. } = &e.to {
+                name == "baz"
+            } else {
+                false
+            }
         });
         assert!(baz_edge.is_some(), "expected call to baz");
         let qux_edge = result.edges.iter().find(|e| {
-            if let EdgeTarget::Unresolved { name, .. } = &e.to { name == "qux" } else { false }
+            if let EdgeTarget::Unresolved { name, .. } = &e.to {
+                name == "qux"
+            } else {
+                false
+            }
         });
         assert!(qux_edge.is_some(), "expected call to qux");
     }
@@ -3264,9 +4098,17 @@ end
 "#;
         let result = parse_file("test.rb", src);
         let edge = result.edges.iter().find(|e| {
-            if let EdgeTarget::Unresolved { name, .. } = &e.to { name == "baz" } else { false }
+            if let EdgeTarget::Unresolved { name, .. } = &e.to {
+                name == "baz"
+            } else {
+                false
+            }
         });
-        assert!(edge.is_some(), "expected call edge to baz; edges: {:?}", result.edges);
+        assert!(
+            edge.is_some(),
+            "expected call edge to baz; edges: {:?}",
+            result.edges
+        );
     }
 }
 
@@ -3284,11 +4126,25 @@ class UserRepo {
 }
 "#;
         let result = parse_file("test.kt", src);
-        let cls = result.symbols.iter().find(|s| s.qualified.name == "UserRepo");
-        assert!(cls.is_some(), "expected class UserRepo; syms: {:?}", result.symbols.iter().map(|s| &s.qualified.name).collect::<Vec<_>>());
+        let cls = result
+            .symbols
+            .iter()
+            .find(|s| s.qualified.name == "UserRepo");
+        assert!(
+            cls.is_some(),
+            "expected class UserRepo; syms: {:?}",
+            result
+                .symbols
+                .iter()
+                .map(|s| &s.qualified.name)
+                .collect::<Vec<_>>()
+        );
         assert_eq!(cls.unwrap().kind, SymbolKind::Class);
 
-        let func = result.symbols.iter().find(|s| s.qualified.name == "findById");
+        let func = result
+            .symbols
+            .iter()
+            .find(|s| s.qualified.name == "findById");
         assert!(func.is_some(), "expected function findById");
         assert_eq!(func.unwrap().kind, SymbolKind::Method);
     }
@@ -3306,9 +4162,17 @@ fun main() {
         assert_eq!(func.unwrap().kind, SymbolKind::Function);
 
         let edge = result.edges.iter().find(|e| {
-            if let EdgeTarget::Unresolved { name, .. } = &e.to { name.contains("println") } else { false }
+            if let EdgeTarget::Unresolved { name, .. } = &e.to {
+                name.contains("println")
+            } else {
+                false
+            }
         });
-        assert!(edge.is_some(), "expected call edge to println; edges: {:?}", result.edges);
+        assert!(
+            edge.is_some(),
+            "expected call edge to println; edges: {:?}",
+            result.edges
+        );
     }
 }
 
@@ -3326,8 +4190,19 @@ class Greeter {
 }
 "#;
         let result = parse_file("test.swift", src);
-        let cls = result.symbols.iter().find(|s| s.qualified.name == "Greeter");
-        assert!(cls.is_some(), "expected class Greeter; syms: {:?}", result.symbols.iter().map(|s| &s.qualified.name).collect::<Vec<_>>());
+        let cls = result
+            .symbols
+            .iter()
+            .find(|s| s.qualified.name == "Greeter");
+        assert!(
+            cls.is_some(),
+            "expected class Greeter; syms: {:?}",
+            result
+                .symbols
+                .iter()
+                .map(|s| &s.qualified.name)
+                .collect::<Vec<_>>()
+        );
 
         let func = result.symbols.iter().find(|s| s.qualified.name == "greet");
         assert!(func.is_some(), "expected function greet");
@@ -3342,8 +4217,19 @@ protocol Drawable {
 }
 "#;
         let result = parse_file("test.swift", src);
-        let proto = result.symbols.iter().find(|s| s.qualified.name == "Drawable");
-        assert!(proto.is_some(), "expected protocol Drawable; syms: {:?}", result.symbols.iter().map(|s| &s.qualified.name).collect::<Vec<_>>());
+        let proto = result
+            .symbols
+            .iter()
+            .find(|s| s.qualified.name == "Drawable");
+        assert!(
+            proto.is_some(),
+            "expected protocol Drawable; syms: {:?}",
+            result
+                .symbols
+                .iter()
+                .map(|s| &s.qualified.name)
+                .collect::<Vec<_>>()
+        );
         assert_eq!(proto.unwrap().kind, SymbolKind::Interface);
     }
 }
@@ -3363,7 +4249,15 @@ class Animal {
 "#;
         let result = parse_file("test.dart", src);
         let cls = result.symbols.iter().find(|s| s.qualified.name == "Animal");
-        assert!(cls.is_some(), "expected class Animal; syms: {:?}", result.symbols.iter().map(|s| &s.qualified.name).collect::<Vec<_>>());
+        assert!(
+            cls.is_some(),
+            "expected class Animal; syms: {:?}",
+            result
+                .symbols
+                .iter()
+                .map(|s| &s.qualified.name)
+                .collect::<Vec<_>>()
+        );
         assert_eq!(cls.unwrap().kind, SymbolKind::Class);
     }
 
@@ -3373,8 +4267,19 @@ class Animal {
 enum Direction { north, south, east, west }
 "#;
         let result = parse_file("test.dart", src);
-        let enm = result.symbols.iter().find(|s| s.qualified.name == "Direction");
-        assert!(enm.is_some(), "expected enum Direction; syms: {:?}", result.symbols.iter().map(|s| &s.qualified.name).collect::<Vec<_>>());
+        let enm = result
+            .symbols
+            .iter()
+            .find(|s| s.qualified.name == "Direction");
+        assert!(
+            enm.is_some(),
+            "expected enum Direction; syms: {:?}",
+            result
+                .symbols
+                .iter()
+                .map(|s| &s.qualified.name)
+                .collect::<Vec<_>>()
+        );
         assert_eq!(enm.unwrap().kind, SymbolKind::Enum);
     }
 }
@@ -3392,7 +4297,15 @@ end
 "#;
         let result = parse_file("test.lua", src);
         let func = result.symbols.iter().find(|s| s.qualified.name == "greet");
-        assert!(func.is_some(), "expected function greet; syms: {:?}", result.symbols.iter().map(|s| &s.qualified.name).collect::<Vec<_>>());
+        assert!(
+            func.is_some(),
+            "expected function greet; syms: {:?}",
+            result
+                .symbols
+                .iter()
+                .map(|s| &s.qualified.name)
+                .collect::<Vec<_>>()
+        );
         assert_eq!(func.unwrap().kind, SymbolKind::Function);
     }
 
@@ -3405,9 +4318,17 @@ end
 "#;
         let result = parse_file("test.lua", src);
         let edge = result.edges.iter().find(|e| {
-            if let EdgeTarget::Unresolved { name, .. } = &e.to { name == "bar" } else { false }
+            if let EdgeTarget::Unresolved { name, .. } = &e.to {
+                name == "bar"
+            } else {
+                false
+            }
         });
-        assert!(edge.is_some(), "expected call edge to bar; edges: {:?}", result.edges);
+        assert!(
+            edge.is_some(),
+            "expected call edge to bar; edges: {:?}",
+            result.edges
+        );
     }
 
     #[test]
@@ -3419,7 +4340,15 @@ end
 "#;
         let result = parse_file("test.lua", src);
         let method = result.symbols.iter().find(|s| s.qualified.name == "method");
-        assert!(method.is_some(), "expected method; syms: {:?}", result.symbols.iter().map(|s| &s.qualified.name).collect::<Vec<_>>());
+        assert!(
+            method.is_some(),
+            "expected method; syms: {:?}",
+            result
+                .symbols
+                .iter()
+                .map(|s| &s.qualified.name)
+                .collect::<Vec<_>>()
+        );
         assert_eq!(method.unwrap().kind, SymbolKind::Method);
     }
 }
@@ -3439,10 +4368,21 @@ end
 "#;
         let result = parse_file("test.luau", src);
         let type_sym = result.symbols.iter().find(|s| s.qualified.name == "Point");
-        assert!(type_sym.is_some(), "expected type Point; syms: {:?}", result.symbols.iter().map(|s| &s.qualified.name).collect::<Vec<_>>());
+        assert!(
+            type_sym.is_some(),
+            "expected type Point; syms: {:?}",
+            result
+                .symbols
+                .iter()
+                .map(|s| &s.qualified.name)
+                .collect::<Vec<_>>()
+        );
         assert_eq!(type_sym.unwrap().kind, SymbolKind::Struct);
 
-        let func = result.symbols.iter().find(|s| s.qualified.name == "distance");
+        let func = result
+            .symbols
+            .iter()
+            .find(|s| s.qualified.name == "distance");
         assert!(func.is_some(), "expected function distance");
         assert_eq!(func.unwrap().kind, SymbolKind::Function);
     }
@@ -3464,7 +4404,15 @@ end;
         // Pascal grammar may vary; check if we get any symbols at all
         if !result.symbols.is_empty() {
             let proc = result.symbols.iter().find(|s| s.qualified.name == "Hello");
-            assert!(proc.is_some(), "expected procedure Hello; syms: {:?}", result.symbols.iter().map(|s| &s.qualified.name).collect::<Vec<_>>());
+            assert!(
+                proc.is_some(),
+                "expected procedure Hello; syms: {:?}",
+                result
+                    .symbols
+                    .iter()
+                    .map(|s| &s.qualified.name)
+                    .collect::<Vec<_>>()
+            );
         }
     }
 }
@@ -3485,12 +4433,24 @@ function greet(name) {
 "#;
         let result = parse_file("test.svelte", src);
         let func = result.symbols.iter().find(|s| s.qualified.name == "greet");
-        assert!(func.is_some(), "expected function greet from script block; syms: {:?}", result.symbols.iter().map(|s| &s.qualified.name).collect::<Vec<_>>());
+        assert!(
+            func.is_some(),
+            "expected function greet from script block; syms: {:?}",
+            result
+                .symbols
+                .iter()
+                .map(|s| &s.qualified.name)
+                .collect::<Vec<_>>()
+        );
         assert_eq!(func.unwrap().kind, SymbolKind::Function);
         // Line offset: script block starts at line 1 (0-indexed row 0),
         // raw_text starts at row 1, function is on row 1 of raw_text
         // so line_start should be > 1
-        assert!(func.unwrap().line_start >= 2, "line_start should be offset; got {}", func.unwrap().line_start);
+        assert!(
+            func.unwrap().line_start >= 2,
+            "line_start should be offset; got {}",
+            func.unwrap().line_start
+        );
     }
 
     #[test]
@@ -3502,8 +4462,19 @@ function typedFunc(): string {
 </script>
 "#;
         let result = parse_file("test.svelte", src);
-        let func = result.symbols.iter().find(|s| s.qualified.name == "typedFunc");
-        assert!(func.is_some(), "expected function typedFunc from TS script block; syms: {:?}", result.symbols.iter().map(|s| &s.qualified.name).collect::<Vec<_>>());
+        let func = result
+            .symbols
+            .iter()
+            .find(|s| s.qualified.name == "typedFunc");
+        assert!(
+            func.is_some(),
+            "expected function typedFunc from TS script block; syms: {:?}",
+            result
+                .symbols
+                .iter()
+                .map(|s| &s.qualified.name)
+                .collect::<Vec<_>>()
+        );
     }
 }
 
@@ -3519,6 +4490,9 @@ mod liquid_tests {
         let result = parse_file("test.liquid", src);
         // Liquid parsing should not crash, and ideally find symbols
         // The exact grammar behavior depends on the vendored parser
-        assert!(result.chunks.len() > 0, "expected at least one chunk from liquid file");
+        assert!(
+            result.chunks.len() > 0,
+            "expected at least one chunk from liquid file"
+        );
     }
 }

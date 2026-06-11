@@ -20,10 +20,7 @@ pub enum IndexEvent {
         queue_wait_ms: u64,
     },
     /// A file was skipped during parsing (read/stat failure).
-    FileSkipped {
-        file: String,
-        reason: String,
-    },
+    FileSkipped { file: String, reason: String },
     /// A file's chunks were embedded (stage 2 complete for this file).
     FileEmbedded {
         file: String,

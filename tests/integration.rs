@@ -76,7 +76,12 @@ async fn test_get_creates_default() {
     assert_eq!(body["version"], 6);
 
     // repos should be an empty array
-    assert!(body["repos"].as_array().map(|a| a.is_empty()).unwrap_or(false));
+    assert!(
+        body["repos"]
+            .as_array()
+            .map(|a| a.is_empty())
+            .unwrap_or(false)
+    );
 
     // settings.json should have been created on disk
     let settings_path = config_path(home.path());
@@ -144,7 +149,10 @@ async fn test_put_round_trips() {
 
     let get_body: Settings = get_res.json().await.expect("parse GET response");
 
-    assert_eq!(put_body, get_body, "PUT response and subsequent GET should be equal");
+    assert_eq!(
+        put_body, get_body,
+        "PUT response and subsequent GET should be equal"
+    );
     let expected_repos: Vec<String> = vec!["/home/user/myproject", "/home/user/other"]
         .into_iter()
         .map(|r| context_engine_rs::store::normalize_repo_path(r))
@@ -181,7 +189,10 @@ async fn test_unix_file_permissions() {
     let settings_path = config_path(home.path());
     let meta = std::fs::metadata(&settings_path).expect("stat settings.json");
     let mode = meta.permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600, "settings.json should have mode 0o600, got 0o{mode:o}");
+    assert_eq!(
+        mode, 0o600,
+        "settings.json should have mode 0o600, got 0o{mode:o}"
+    );
 }
 
 // ─── Test 4: PUT a repo → subsequent query sees it (live settings) ────────
@@ -334,9 +345,9 @@ async fn test_put_repo_registers_status() {
 
     let statuses: Vec<serde_json::Value> = status_res.json().await.expect("parse status response");
     let normalized = context_engine_rs::store::normalize_repo_path(&repo_path);
-    let found = statuses.iter().any(|s| {
-        s["repo"].as_str().map(|r| r == normalized).unwrap_or(false)
-    });
+    let found = statuses
+        .iter()
+        .any(|s| s["repo"].as_str().map(|r| r == normalized).unwrap_or(false));
 
     assert!(
         found,
@@ -407,7 +418,9 @@ async fn test_cancel_index_and_reindex() {
             .build()
             .expect("sse client");
         let sse_res = sse_client
-            .get(format!("http://{sse_addr}/api/repos/{sse_repo_id}/index-events"))
+            .get(format!(
+                "http://{sse_addr}/api/repos/{sse_repo_id}/index-events"
+            ))
             .send()
             .await
             .expect("SSE connect");
@@ -462,7 +475,10 @@ async fn test_cancel_index_and_reindex() {
             .await
             .expect("status");
         let statuses: Vec<serde_json::Value> = status_res.json().await.expect("parse");
-        if let Some(s) = statuses.iter().find(|s| s["repo"].as_str() == Some(normalized_repo.as_str())) {
+        if let Some(s) = statuses
+            .iter()
+            .find(|s| s["repo"].as_str() == Some(normalized_repo.as_str()))
+        {
             if s["state"].as_str() == Some("idle") {
                 back_to_idle = true;
                 break;
@@ -514,15 +530,23 @@ async fn test_cancel_index_and_reindex() {
             .await
             .expect("status");
         let statuses: Vec<serde_json::Value> = status_res.json().await.expect("parse");
-        if let Some(s) = statuses.iter().find(|s| s["repo"].as_str() == Some(normalized_repo.as_str())) {
+        if let Some(s) = statuses
+            .iter()
+            .find(|s| s["repo"].as_str() == Some(normalized_repo.as_str()))
+        {
             let state = s["state"].as_str().unwrap_or("");
-            if state == "indexing" || (state == "idle" && s["indexed_files"].as_u64().unwrap_or(0) > 0) {
+            if state == "indexing"
+                || (state == "idle" && s["indexed_files"].as_u64().unwrap_or(0) > 0)
+            {
                 reindex_started = true;
                 break;
             }
         }
     }
-    assert!(reindex_started, "re-index after cancel did not start — token may be poisoned");
+    assert!(
+        reindex_started,
+        "re-index after cancel did not start — token may be poisoned"
+    );
 }
 
 // ─── Test 7: DELETE /api/repos/:repo_id/index removes the DB directory ────
@@ -591,7 +615,10 @@ async fn test_delete_repo_index_removes_directory() {
         .await
         .expect("status");
     let statuses: Vec<serde_json::Value> = status_res.json().await.expect("parse");
-    if let Some(s) = statuses.iter().find(|s| s["repo"].as_str() == Some(repo_path)) {
+    if let Some(s) = statuses
+        .iter()
+        .find(|s| s["repo"].as_str() == Some(repo_path))
+    {
         assert_eq!(s["state"].as_str(), Some("idle"));
         assert_eq!(s["indexed_files"].as_u64(), Some(0));
     }
@@ -639,7 +666,10 @@ async fn test_put_data_dir_persists_but_does_not_relocate() {
         .json()
         .await
         .expect("parse pre-put");
-    assert!(body.data_dir.is_none(), "fresh install: data_dir should be None");
+    assert!(
+        body.data_dir.is_none(),
+        "fresh install: data_dir should be None"
+    );
 
     // PUT a config with a new data_dir.
     let new_data_dir = next_launch_dir.path().to_path_buf();

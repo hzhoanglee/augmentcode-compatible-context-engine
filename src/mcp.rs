@@ -8,10 +8,10 @@ use surrealdb::engine::local::Db;
 use tokio::sync::RwLock;
 
 use rmcp::{
-    ServerHandler, tool, tool_handler, tool_router,
-    model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
+    ErrorData, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    schemars, ErrorData,
+    model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
+    schemars, tool, tool_handler, tool_router,
 };
 
 use crate::config::Settings;
@@ -212,12 +212,9 @@ fn merge_overlapping_blocks(blocks: Vec<OutputBlock>) -> Vec<OutputBlock> {
                 }
             }
             // Rebuild header with updated range + enriched caller/callee tags.
-            let caller_tag = format_enriched_caller_tag(
-                block.callers, &block.caller_names, block.caller_files,
-            );
-            let callee_tag = format_enriched_callee_tag(
-                block.callees, &block.callee_names,
-            );
+            let caller_tag =
+                format_enriched_caller_tag(block.callers, &block.caller_names, block.caller_files);
+            let callee_tag = format_enriched_callee_tag(block.callees, &block.callee_names);
             block.header = format!(
                 "{}#L{}-{}{}{}",
                 block.file, block.line_start, block.line_end, caller_tag, callee_tag
@@ -434,11 +431,9 @@ needed) to get current content before making edits."
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for McpHandler {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(rmcp::model::Implementation::new(
-                "context-engine-rs",
-                env!("CARGO_PKG_VERSION"),
-            ))
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
+            rmcp::model::Implementation::new("context-engine-rs", env!("CARGO_PKG_VERSION")),
+        )
     }
 }
 
@@ -597,11 +592,9 @@ needed) to get current content before making edits."
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for RepoMcpHandler {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(rmcp::model::Implementation::new(
-                "context-engine-rs",
-                env!("CARGO_PKG_VERSION"),
-            ))
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
+            rmcp::model::Implementation::new("context-engine-rs", env!("CARGO_PKG_VERSION")),
+        )
     }
 }
 
@@ -685,7 +678,9 @@ pub async fn run_codebase_retrieval(
     };
 
     let chunk_count = store::ops::count_chunks(&db).await.unwrap_or(0);
-    let last_indexed_ts = store::ops::get_meta(&db, "last_indexed_at").await.unwrap_or(None);
+    let last_indexed_ts = store::ops::get_meta(&db, "last_indexed_at")
+        .await
+        .unwrap_or(None);
 
     let stale_threshold = chrono::Duration::days(settings.mcp_stale_after_days as i64);
     let is_usable = check_usable(chunk_count, &last_indexed_ts, stale_threshold);
@@ -741,10 +736,12 @@ pub async fn run_codebase_retrieval(
                             "(index refresh failed: {}; showing previous results)\n\n",
                             err
                         );
-                        return format!("{}{}", prefix, do_query(
-                            index_engine, repo_dbs, settings,
-                            information_request, repo,
-                        ).await);
+                        return format!(
+                            "{}{}",
+                            prefix,
+                            do_query(index_engine, repo_dbs, settings, information_request, repo,)
+                                .await
+                        );
                     } else {
                         return format!(
                             "Error: indexing failed ({}). Use grep to search the codebase directly.",
@@ -757,10 +754,18 @@ pub async fn run_codebase_retrieval(
                     if Instant::now() >= deadline {
                         if is_usable {
                             let prefix = "(still indexing; results may be incomplete)\n\n";
-                            return format!("{}{}", prefix, do_query(
-                                index_engine, repo_dbs, settings,
-                                information_request, repo,
-                            ).await);
+                            return format!(
+                                "{}{}",
+                                prefix,
+                                do_query(
+                                    index_engine,
+                                    repo_dbs,
+                                    settings,
+                                    information_request,
+                                    repo,
+                                )
+                                .await
+                            );
                         } else {
                             return "Codebase is indexing, use grep instead.".to_string();
                         }
@@ -840,7 +845,11 @@ mod tests {
     // 5. chunk_count > 0, unparseable timestamp → true (corrupt stamp, chunks exist).
     #[test]
     fn unparseable_timestamp_is_usable() {
-        assert!(check_usable(50, &Some("not-a-date".to_string()), THRESHOLD()));
+        assert!(check_usable(
+            50,
+            &Some("not-a-date".to_string()),
+            THRESHOLD()
+        ));
     }
 
     // 6a. Boundary: just inside threshold (6 days ago ≤ 7d) → true.
@@ -860,7 +869,10 @@ mod tests {
         let repo = r"D:\projects\Python\local-context-engine";
         let file_path = r"context-engine-rs\Cargo.toml";
         let db_key = build_db_key(repo, file_path);
-        assert_eq!(db_key, r"D:\projects\Python\local-context-engine\context-engine-rs\Cargo.toml");
+        assert_eq!(
+            db_key,
+            r"D:\projects\Python\local-context-engine\context-engine-rs\Cargo.toml"
+        );
     }
 
     #[test]
@@ -868,7 +880,10 @@ mod tests {
         let repo = r"D:\projects\Python\local-context-engine";
         let file_path = "context-engine-rs/Cargo.toml";
         let db_key = build_db_key(repo, file_path);
-        assert_eq!(db_key, r"D:\projects\Python\local-context-engine\context-engine-rs\Cargo.toml");
+        assert_eq!(
+            db_key,
+            r"D:\projects\Python\local-context-engine\context-engine-rs\Cargo.toml"
+        );
     }
 
     #[test]
@@ -876,7 +891,10 @@ mod tests {
         let repo = r"D:\projects\Python\local-context-engine";
         let file_path = r"src/indexing\pipeline.rs";
         let db_key = build_db_key(repo, file_path);
-        assert_eq!(db_key, r"D:\projects\Python\local-context-engine\src\indexing\pipeline.rs");
+        assert_eq!(
+            db_key,
+            r"D:\projects\Python\local-context-engine\src\indexing\pipeline.rs"
+        );
     }
 
     #[test]
@@ -884,7 +902,10 @@ mod tests {
         let repo = r"D:\projects\Python\local-context-engine";
         let file_path = "/context-engine-rs/Cargo.toml";
         let db_key = build_db_key(repo, file_path);
-        assert_eq!(db_key, r"D:\projects\Python\local-context-engine\context-engine-rs\Cargo.toml");
+        assert_eq!(
+            db_key,
+            r"D:\projects\Python\local-context-engine\context-engine-rs\Cargo.toml"
+        );
     }
 
     #[test]
@@ -892,7 +913,10 @@ mod tests {
         let repo = r"D:\projects\Python\local-context-engine";
         let file_path = r"\context-engine-rs\Cargo.toml";
         let db_key = build_db_key(repo, file_path);
-        assert_eq!(db_key, r"D:\projects\Python\local-context-engine\context-engine-rs\Cargo.toml");
+        assert_eq!(
+            db_key,
+            r"D:\projects\Python\local-context-engine\context-engine-rs\Cargo.toml"
+        );
     }
 
     #[test]
@@ -900,7 +924,10 @@ mod tests {
         let repo = r"D:\projects\Python\local-context-engine\";
         let file_path = "context-engine-rs/Cargo.toml";
         let db_key = build_db_key(repo, file_path);
-        assert_eq!(db_key, r"D:\projects\Python\local-context-engine\context-engine-rs\Cargo.toml");
+        assert_eq!(
+            db_key,
+            r"D:\projects\Python\local-context-engine\context-engine-rs\Cargo.toml"
+        );
     }
 
     #[test]
@@ -908,7 +935,10 @@ mod tests {
         let repo = r"D:\projects\Python\local-context-engine/";
         let file_path = "/context-engine-rs/Cargo.toml";
         let db_key = build_db_key(repo, file_path);
-        assert_eq!(db_key, r"D:\projects\Python\local-context-engine\context-engine-rs\Cargo.toml");
+        assert_eq!(
+            db_key,
+            r"D:\projects\Python\local-context-engine\context-engine-rs\Cargo.toml"
+        );
     }
 
     #[test]
@@ -949,9 +979,9 @@ mod tests {
                 file: "file.rs".to_string(),
                 line_start: 1,
                 line_end: 10,
-            callers: None,
-            caller_files: None,
-                    ..Default::default()
+                callers: None,
+                caller_files: None,
+                ..Default::default()
             },
             OutputBlock {
                 header: "file.rs#L20-30".to_string(),
@@ -959,9 +989,9 @@ mod tests {
                 file: "file.rs".to_string(),
                 line_start: 20,
                 line_end: 30,
-            callers: None,
-            caller_files: None,
-                    ..Default::default()
+                callers: None,
+                caller_files: None,
+                ..Default::default()
             },
         ];
         let out = assemble_with_budget(&blocks);
@@ -984,9 +1014,9 @@ mod tests {
                 file: "big.rs".to_string(),
                 line_start: i * 500 + 1,
                 line_end: (i + 1) * 500,
-            callers: None,
-            caller_files: None,
-                    ..Default::default()
+                callers: None,
+                caller_files: None,
+                ..Default::default()
             });
         }
         let out = assemble_with_budget(&blocks);
@@ -998,18 +1028,16 @@ mod tests {
     #[test]
     fn budget_first_line_capped_at_120() {
         let long_line = format!("1: {}", "x".repeat(200));
-        let blocks = vec![
-            OutputBlock {
-                header: "file.rs#L1-5".to_string(),
-                content: "1: short line".to_string(),
-                file: "file.rs".to_string(),
-                line_start: 1,
-                line_end: 5,
+        let blocks = vec![OutputBlock {
+            header: "file.rs#L1-5".to_string(),
+            content: "1: short line".to_string(),
+            file: "file.rs".to_string(),
+            line_start: 1,
+            line_end: 5,
             callers: None,
             caller_files: None,
-                    ..Default::default()
-            },
-        ];
+            ..Default::default()
+        }];
         // This block fits fully, so test the truncation on a block that exceeds budget.
         let big = "y".repeat(MAX_TOOL_OUTPUT_CHARS);
         let blocks2 = vec![
@@ -1019,9 +1047,9 @@ mod tests {
                 file: "a.rs".to_string(),
                 line_start: 1,
                 line_end: 999,
-            callers: None,
-            caller_files: None,
-                    ..Default::default()
+                callers: None,
+                caller_files: None,
+                ..Default::default()
             },
             OutputBlock {
                 header: "b.rs#L1-10".to_string(),
@@ -1029,9 +1057,9 @@ mod tests {
                 file: "b.rs".to_string(),
                 line_start: 1,
                 line_end: 10,
-            callers: None,
-            caller_files: None,
-                    ..Default::default()
+                callers: None,
+                caller_files: None,
+                ..Default::default()
             },
         ];
         let out = assemble_with_budget(&blocks2);
@@ -1062,9 +1090,9 @@ mod tests {
                 file: "huge.rs".to_string(),
                 line_start: 1,
                 line_end: 999,
-            callers: None,
-            caller_files: None,
-                    ..Default::default()
+                callers: None,
+                caller_files: None,
+                ..Default::default()
             },
             OutputBlock {
                 header: "file.rs#L5-5".to_string(),
@@ -1072,9 +1100,9 @@ mod tests {
                 file: "file.rs".to_string(),
                 line_start: 5,
                 line_end: 5,
-            callers: None,
-            caller_files: None,
-                    ..Default::default()
+                callers: None,
+                caller_files: None,
+                ..Default::default()
             },
         ];
         let out = assemble_with_budget(&blocks2);
@@ -1094,9 +1122,9 @@ mod tests {
                 file: "a.rs".into(),
                 line_start: 1,
                 line_end: 10,
-            callers: None,
-            caller_files: None,
-                    ..Default::default()
+                callers: None,
+                caller_files: None,
+                ..Default::default()
             },
             OutputBlock {
                 header: "a.rs#L20-30".into(),
@@ -1104,9 +1132,9 @@ mod tests {
                 file: "a.rs".into(),
                 line_start: 20,
                 line_end: 30,
-            callers: None,
-            caller_files: None,
-                    ..Default::default()
+                callers: None,
+                caller_files: None,
+                ..Default::default()
             },
         ];
         let merged = merge_overlapping_blocks(blocks);
@@ -1126,7 +1154,7 @@ mod tests {
                 line_end: 50,
                 callers: None,
                 caller_files: None,
-                    ..Default::default()
+                ..Default::default()
             },
             OutputBlock {
                 header: "a.rs#L26-75".into(),
@@ -1136,7 +1164,7 @@ mod tests {
                 line_end: 75,
                 callers: None,
                 caller_files: None,
-                    ..Default::default()
+                ..Default::default()
             },
         ];
         let merged = merge_overlapping_blocks(blocks);
@@ -1158,7 +1186,7 @@ mod tests {
                 line_end: 50,
                 callers: Some(3),
                 caller_files: Some(2),
-                    ..Default::default()
+                ..Default::default()
             },
             OutputBlock {
                 header: "a.rs#L26-75 [callers:7 files:4]".into(),
@@ -1168,7 +1196,7 @@ mod tests {
                 line_end: 75,
                 callers: Some(7),
                 caller_files: Some(4),
-                    ..Default::default()
+                ..Default::default()
             },
         ];
         let merged = merge_overlapping_blocks(blocks);
@@ -1189,9 +1217,9 @@ mod tests {
                 file: "a.rs".into(),
                 line_start: 1,
                 line_end: 10,
-            callers: None,
-            caller_files: None,
-                    ..Default::default()
+                callers: None,
+                caller_files: None,
+                ..Default::default()
             },
             OutputBlock {
                 header: "a.rs#L11-20".into(),
@@ -1199,9 +1227,9 @@ mod tests {
                 file: "a.rs".into(),
                 line_start: 11,
                 line_end: 20,
-            callers: None,
-            caller_files: None,
-                    ..Default::default()
+                callers: None,
+                caller_files: None,
+                ..Default::default()
             },
         ];
         let merged = merge_overlapping_blocks(blocks);
@@ -1219,9 +1247,9 @@ mod tests {
                 file: "a.rs".into(),
                 line_start: 1,
                 line_end: 50,
-            callers: None,
-            caller_files: None,
-                    ..Default::default()
+                callers: None,
+                caller_files: None,
+                ..Default::default()
             },
             OutputBlock {
                 header: "b.rs#L1-50".into(),
@@ -1229,9 +1257,9 @@ mod tests {
                 file: "b.rs".into(),
                 line_start: 1,
                 line_end: 50,
-            callers: None,
-            caller_files: None,
-                    ..Default::default()
+                callers: None,
+                caller_files: None,
+                ..Default::default()
             },
         ];
         let merged = merge_overlapping_blocks(blocks);
@@ -1247,9 +1275,9 @@ mod tests {
                 file: "b.rs".into(),
                 line_start: 1,
                 line_end: 10,
-            callers: None,
-            caller_files: None,
-                    ..Default::default()
+                callers: None,
+                caller_files: None,
+                ..Default::default()
             },
             OutputBlock {
                 header: "a.rs#L1-50".into(),
@@ -1257,9 +1285,9 @@ mod tests {
                 file: "a.rs".into(),
                 line_start: 1,
                 line_end: 50,
-            callers: None,
-            caller_files: None,
-                    ..Default::default()
+                callers: None,
+                caller_files: None,
+                ..Default::default()
             },
             OutputBlock {
                 header: "a.rs#L26-75".into(),
@@ -1267,9 +1295,9 @@ mod tests {
                 file: "a.rs".into(),
                 line_start: 26,
                 line_end: 75,
-            callers: None,
-            caller_files: None,
-                    ..Default::default()
+                callers: None,
+                caller_files: None,
+                ..Default::default()
             },
             OutputBlock {
                 header: "b.rs#L20-30".into(),
@@ -1277,9 +1305,9 @@ mod tests {
                 file: "b.rs".into(),
                 line_start: 20,
                 line_end: 30,
-            callers: None,
-            caller_files: None,
-                    ..Default::default()
+                callers: None,
+                caller_files: None,
+                ..Default::default()
             },
         ];
         let merged = merge_overlapping_blocks(blocks);
@@ -1309,9 +1337,9 @@ mod tests {
                 file: "/nonexistent/z.rs".into(),
                 line_start: 1,
                 line_end: 50,
-            callers: None,
-            caller_files: None,
-                    ..Default::default()
+                callers: None,
+                caller_files: None,
+                ..Default::default()
             },
             OutputBlock {
                 header: "/nonexistent/z.rs#L26-75".into(),
@@ -1319,9 +1347,9 @@ mod tests {
                 file: "/nonexistent/z.rs".into(),
                 line_start: 26,
                 line_end: 75,
-            callers: None,
-            caller_files: None,
-                    ..Default::default()
+                callers: None,
+                caller_files: None,
+                ..Default::default()
             },
         ];
         let merged = merge_overlapping_blocks(blocks);
@@ -1392,7 +1420,11 @@ fn format_enriched_caller_tag(
     let display_names: Vec<&str> = names.iter().take(max_display).map(|s| s.as_str()).collect();
     let remaining = c.saturating_sub(display_names.len() as u32);
     if remaining > 0 {
-        format!(" [callers: {} +{} more]", display_names.join(", "), remaining)
+        format!(
+            " [callers: {} +{} more]",
+            display_names.join(", "),
+            remaining
+        )
     } else {
         format!(" [callers: {}]", display_names.join(", "))
     }
@@ -1400,10 +1432,7 @@ fn format_enriched_caller_tag(
 
 /// Format an enriched callee tag: `[calls: fn_x, fn_y +N more]`
 /// Returns empty string when no callees.
-fn format_enriched_callee_tag(
-    count: Option<u32>,
-    names: &[String],
-) -> String {
+fn format_enriched_callee_tag(count: Option<u32>, names: &[String]) -> String {
     let c = match count {
         Some(c) if c > 0 => c,
         _ => return String::new(),
@@ -1443,7 +1472,9 @@ async fn do_query(
         std::sync::OnceLock::new();
     let _permit = if settings.mcp_retrieval_concurrency > 0 {
         let gate = RETRIEVAL_GATE.get_or_init(|| {
-            Arc::new(tokio::sync::Semaphore::new(settings.mcp_retrieval_concurrency))
+            Arc::new(tokio::sync::Semaphore::new(
+                settings.mcp_retrieval_concurrency,
+            ))
         });
         match gate.clone().acquire_owned().await {
             Ok(p) => Some(p),
@@ -1509,12 +1540,9 @@ async fn do_query(
                 .results
                 .iter()
                 .map(|r| {
-                    let caller_tag = format_enriched_caller_tag(
-                        r.callers, &r.caller_names, r.caller_files,
-                    );
-                    let callee_tag = format_enriched_callee_tag(
-                        r.callees, &r.callee_names,
-                    );
+                    let caller_tag =
+                        format_enriched_caller_tag(r.callers, &r.caller_names, r.caller_files);
+                    let callee_tag = format_enriched_callee_tag(r.callees, &r.callee_names);
                     OutputBlock {
                         header: format!(
                             "{}#L{}-{}{}{}",
@@ -1679,9 +1707,14 @@ pub async fn run_file_retrieval(
 
     for k in 0..final_count {
         let idx = rerank_output.reranked_indices[k];
-        let Some(chunk) = merge_chunks.get(idx) else { continue };
+        let Some(chunk) = merge_chunks.get(idx) else {
+            continue;
+        };
         let numbered_text = numbered.get(idx).and_then(|n| n.as_deref());
-        let selection = rerank_output.line_selections.get(k).and_then(|s| s.as_ref());
+        let selection = rerank_output
+            .line_selections
+            .get(k)
+            .and_then(|s| s.as_ref());
 
         match (numbered_text, selection) {
             (Some(text), Some(ranges)) if !ranges.is_empty() => {
@@ -1695,7 +1728,7 @@ pub async fn run_file_retrieval(
                         line_end: e,
                         callers: None,
                         caller_files: None,
-                    ..Default::default()
+                        ..Default::default()
                     });
                 }
             }

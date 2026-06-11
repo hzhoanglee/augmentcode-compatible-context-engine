@@ -1,6 +1,5 @@
 use std::{
-    fs,
-    io,
+    fs, io,
     path::{Path, PathBuf},
 };
 
@@ -16,7 +15,13 @@ pub type MigrationFn = fn(Value) -> Result<Value, ConfigError>;
 
 /// Ordered list of migration functions. Each entry migrates from version N to N+1,
 /// where N is the index into this slice (0-based, so index 0 = v1→v2, etc.).
-pub const MIGRATIONS: &[MigrationFn] = &[migrate_v1_to_v2, migrate_v2_to_v3, migrate_v3_to_v4, migrate_v4_to_v5, migrate_v5_to_v6];
+pub const MIGRATIONS: &[MigrationFn] = &[
+    migrate_v1_to_v2,
+    migrate_v2_to_v3,
+    migrate_v3_to_v4,
+    migrate_v4_to_v5,
+    migrate_v5_to_v6,
+];
 
 /// v1→v2: introduce `data_dir` (Option<PathBuf>). The body is a no-op stamp —
 /// `serde(default)` already handles missing fields on deserialize, but we
@@ -39,7 +44,8 @@ fn migrate_v1_to_v2(mut value: Value) -> Result<Value, ConfigError> {
 /// `~/.vibervn/context-engine/embeddings` (anchored to home, not `data_dir`).
 fn migrate_v2_to_v3(mut value: Value) -> Result<Value, ConfigError> {
     if let Value::Object(ref mut obj) = value {
-        obj.entry("embeddings_dir".to_string()).or_insert(Value::Null);
+        obj.entry("embeddings_dir".to_string())
+            .or_insert(Value::Null);
     }
     Ok(value)
 }
@@ -48,12 +54,13 @@ fn migrate_v2_to_v3(mut value: Value) -> Result<Value, ConfigError> {
 /// enabled so existing installations gain file-retrieval without manual opt-in.
 fn migrate_v3_to_v4(mut value: Value) -> Result<Value, ConfigError> {
     if let Value::Object(ref mut obj) = value {
-        obj.entry("enabled_mcp_tools".to_string()).or_insert_with(|| {
-            Value::Array(vec![
-                Value::String("codebase-retrieval".to_string()),
-                Value::String("file-retrieval".to_string()),
-            ])
-        });
+        obj.entry("enabled_mcp_tools".to_string())
+            .or_insert_with(|| {
+                Value::Array(vec![
+                    Value::String("codebase-retrieval".to_string()),
+                    Value::String("file-retrieval".to_string()),
+                ])
+            });
     }
     Ok(value)
 }
@@ -312,6 +319,10 @@ fn default_mcp_retrieval_concurrency() -> usize {
     8
 }
 
+fn default_index_concurrency() -> usize {
+    3
+}
+
 fn default_enabled_mcp_tools() -> Vec<String> {
     vec![
         "codebase-retrieval".to_string(),
@@ -345,6 +356,16 @@ pub struct Settings {
     /// rayon at the same time. 0 disables the gate.
     #[serde(default = "default_mcp_retrieval_concurrency")]
     pub mcp_retrieval_concurrency: usize,
+    /// Maximum number of repos indexed concurrently. Index triggers from many
+    /// workspaces (web UI, REST proxy, watcher) share one consumer; this bounds
+    /// how many run their pipeline at once so a burst of simultaneous index
+    /// requests overlaps instead of draining strictly one-at-a-time. Each run
+    /// still has internal parallelism (embedding concurrency), so keep this
+    /// modest — the embedding backend / CPU is the real ceiling. Runs for the
+    /// SAME repo are always serialised regardless of this value. Minimum 1;
+    /// boot-frozen (a PUT change takes effect on the next launch). Defaults to 3.
+    #[serde(default = "default_index_concurrency")]
+    pub index_concurrency: usize,
     /// Resident-byte cap for the per-repo sharded vector index, in megabytes.
     /// Bounds in-RAM embedding storage across all repos; LRU-evicts non-active
     /// repos when exceeded. 0 disables the cap. Defaults to 2048 (~2 GB).
@@ -390,7 +411,10 @@ pub struct Settings {
     /// built-in `CODE_EXTENSIONS` list. E.g. `["prisma", "zig", "nim"]`.
     #[serde(default)]
     pub custom_extensions: Vec<String>,
-    /// Filenames to skip during indexing (case-sensitive, filename-only match).
+    /// Patterns for files to skip during indexing, matched with gitignore
+    /// syntax. A bare name like `CLAUDE.md` matches that file in any directory;
+    /// globs are honored too — `*.min.js`, `**/*.generated.ts`, `dist/`, etc.
+    /// Defaults to `["CLAUDE.md", "AGENTS.md"]`.
     #[serde(default = "default_index_ignore_filenames")]
     pub index_ignore_filenames: Vec<String>,
 }
@@ -406,6 +430,7 @@ impl Default for Settings {
             mcp_index_wait_secs: default_mcp_index_wait_secs(),
             mcp_stale_after_days: default_mcp_stale_after_days(),
             mcp_retrieval_concurrency: default_mcp_retrieval_concurrency(),
+            index_concurrency: default_index_concurrency(),
             vector_resident_cap_mb: default_vector_resident_cap_mb(),
             data_dir: None,
             embeddings_dir: None,
@@ -522,8 +547,7 @@ pub fn write_settings_atomic(target: &Path, settings: &Settings) -> Result<(), C
     })?;
 
     // 3. Serialize and write.
-    let json = serde_json::to_string_pretty(settings)
-        .map_err(ConfigError::Parse)?;
+    let json = serde_json::to_string_pretty(settings).map_err(ConfigError::Parse)?;
 
     fs::write(temp.path(), json.as_bytes()).map_err(|e| ConfigError::Io {
         op: "write tempfile for",
@@ -608,16 +632,20 @@ pub fn ensure_dir_and_load(home_dir: &Path) -> Result<Settings, ConfigError> {
     } else if file_version == CURRENT_VERSION {
         serde_json::from_value::<Settings>(value).map_err(ConfigError::Parse)?
     } else if file_version > CURRENT_VERSION {
-        return Err(ConfigError::VersionTooNew { found: file_version });
+        return Err(ConfigError::VersionTooNew {
+            found: file_version,
+        });
     } else {
         // Run migrations from file_version to CURRENT_VERSION.
         for step in file_version..CURRENT_VERSION {
             let idx = (step - 1) as usize; // migration index 0 = v1→v2
-            let migrate = MIGRATIONS.get(idx).ok_or_else(|| ConfigError::MigrationFailed {
-                from: step,
-                to: step + 1,
-                detail: format!("no migration registered for v{step}→v{}", step + 1),
-            })?;
+            let migrate = MIGRATIONS
+                .get(idx)
+                .ok_or_else(|| ConfigError::MigrationFailed {
+                    from: step,
+                    to: step + 1,
+                    detail: format!("no migration registered for v{step}→v{}", step + 1),
+                })?;
             value = migrate(value).map_err(|e| match e {
                 ConfigError::MigrationFailed { .. } => e,
                 other => ConfigError::MigrationFailed {
@@ -702,7 +730,10 @@ mod tests {
     fn test_data_dir_default_is_none() {
         let s = Settings::default();
         assert!(s.data_dir.is_none(), "default data_dir must be None");
-        assert!(s.embeddings_dir.is_none(), "default embeddings_dir must be None");
+        assert!(
+            s.embeddings_dir.is_none(),
+            "default embeddings_dir must be None"
+        );
         assert_eq!(s.version, CURRENT_VERSION);
     }
 
@@ -728,22 +759,33 @@ mod tests {
         // Load: should run the full migration chain (v1→v2→v3).
         let loaded = ensure_dir_and_load(home.path()).expect("load v1");
         assert_eq!(loaded.version, CURRENT_VERSION);
-        assert!(loaded.data_dir.is_none(), "data_dir should be None after migration");
-        assert!(loaded.embeddings_dir.is_none(), "embeddings_dir should be None after migration");
+        assert!(
+            loaded.data_dir.is_none(),
+            "data_dir should be None after migration"
+        );
+        assert!(
+            loaded.embeddings_dir.is_none(),
+            "embeddings_dir should be None after migration"
+        );
 
         // The on-disk file must now report CURRENT_VERSION with explicit null
         // fields — the tripwire that prevents an older binary from silently
         // re-reading and re-saving without the new fields.
         let raw = fs::read_to_string(&path).expect("re-read");
         let v: Value = serde_json::from_str(&raw).expect("parse re-read");
-        assert_eq!(v.get("version").and_then(|x| x.as_u64()), Some(CURRENT_VERSION as u64));
+        assert_eq!(
+            v.get("version").and_then(|x| x.as_u64()),
+            Some(CURRENT_VERSION as u64)
+        );
         assert!(
             v.get("data_dir").map(|x| x.is_null()).unwrap_or(false),
             "on-disk data_dir should be explicit null after migration, got: {:?}",
             v.get("data_dir")
         );
         assert!(
-            v.get("embeddings_dir").map(|x| x.is_null()).unwrap_or(false),
+            v.get("embeddings_dir")
+                .map(|x| x.is_null())
+                .unwrap_or(false),
             "on-disk embeddings_dir should be explicit null after migration, got: {:?}",
             v.get("embeddings_dir")
         );
@@ -771,13 +813,21 @@ mod tests {
         assert_eq!(loaded.version, CURRENT_VERSION);
         // v2→v3 must NOT disturb the existing data_dir value.
         assert_eq!(loaded.data_dir, Some(PathBuf::from("/var/data/instance-A")));
-        assert!(loaded.embeddings_dir.is_none(), "embeddings_dir should be None (null) after v2→v3");
+        assert!(
+            loaded.embeddings_dir.is_none(),
+            "embeddings_dir should be None (null) after v2→v3"
+        );
 
         let raw = fs::read_to_string(&path).expect("re-read");
         let v: Value = serde_json::from_str(&raw).expect("parse re-read");
-        assert_eq!(v.get("version").and_then(|x| x.as_u64()), Some(CURRENT_VERSION as u64));
+        assert_eq!(
+            v.get("version").and_then(|x| x.as_u64()),
+            Some(CURRENT_VERSION as u64)
+        );
         assert!(
-            v.get("embeddings_dir").map(|x| x.is_null()).unwrap_or(false),
+            v.get("embeddings_dir")
+                .map(|x| x.is_null())
+                .unwrap_or(false),
             "on-disk embeddings_dir should be explicit null after v2→v3, got: {:?}",
             v.get("embeddings_dir")
         );
@@ -830,7 +880,10 @@ mod tests {
         let ed = default_embeddings_dir(home.path());
         assert_eq!(
             ed,
-            home.path().join(".vibervn").join("context-engine").join("embeddings"),
+            home.path()
+                .join(".vibervn")
+                .join("context-engine")
+                .join("embeddings"),
             "default embeddings_dir must match historical layout for byte-identical default install"
         );
     }
@@ -921,7 +974,10 @@ mod tests {
         // Must NOT error on the missing fields.
         let loaded = ensure_dir_and_load(home.path()).expect("load v6 missing agentic fields");
         assert_eq!(loaded.version, CURRENT_VERSION);
-        assert!(!loaded.llm.agentic_rag, "agentic_rag must default to false on old files");
+        assert!(
+            !loaded.llm.agentic_rag,
+            "agentic_rag must default to false on old files"
+        );
         assert_eq!(
             loaded.llm.agentic_rag_max_turns, 9,
             "agentic_rag_max_turns must default to 9 on old files"
@@ -937,7 +993,8 @@ mod tests {
     /// is the narrowest possible proof, independent of the file-load path.
     #[test]
     fn test_llm_config_deserializes_without_agentic_fields() {
-        let json = r#"{"provider":"google","rerank_model":"gemini-3.1-flash-lite","api_keys":["k"]}"#;
+        let json =
+            r#"{"provider":"google","rerank_model":"gemini-3.1-flash-lite","api_keys":["k"]}"#;
         let cfg: LlmConfig = serde_json::from_str(json).expect("deserialize old llm block");
         assert!(!cfg.agentic_rag);
         assert_eq!(cfg.agentic_rag_max_turns, 9);
@@ -953,7 +1010,10 @@ mod tests {
     fn test_llm_config_deserializes_without_openai_base_url() {
         let json = r#"{"provider":"openai","rerank_model":"gpt-4o-mini","api_keys":["k"]}"#;
         let cfg: LlmConfig = serde_json::from_str(json).expect("deserialize old llm block");
-        assert!(cfg.openai_base_url.is_none(), "openai_base_url must default to None on old files");
+        assert!(
+            cfg.openai_base_url.is_none(),
+            "openai_base_url must default to None on old files"
+        );
     }
 
     /// Round-trip: an explicit `openai_base_url` survives serialize → atomic

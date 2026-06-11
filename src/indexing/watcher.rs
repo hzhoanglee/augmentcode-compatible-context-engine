@@ -6,7 +6,7 @@ use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, ne
 use tokio::sync::mpsc::Sender;
 use tracing::{error, info, warn};
 
-use crate::indexing::{IndexTrigger};
+use crate::indexing::IndexTrigger;
 use crate::indexing::tracker::{ChangeKind, FileChange};
 
 /// Start a filesystem watcher for `repo_path`.

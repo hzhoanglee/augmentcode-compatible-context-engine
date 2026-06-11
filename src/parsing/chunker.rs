@@ -63,8 +63,7 @@ pub fn chunk_file(file: &str, source: &str, symbols: &[Symbol]) -> Vec<Chunk> {
         let window_end = (window_start + WINDOW - 1).min(total_lines - 1);
 
         // Check if this window overlaps any uncovered line.
-        let has_uncovered = (window_start..=window_end)
-            .any(|i| !symbol_covered[i as usize]);
+        let has_uncovered = (window_start..=window_end).any(|i| !symbol_covered[i as usize]);
 
         if has_uncovered {
             let content = lines[window_start as usize..=window_end as usize].join("\n");
