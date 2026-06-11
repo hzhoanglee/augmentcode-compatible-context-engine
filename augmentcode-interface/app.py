@@ -6,6 +6,7 @@ or  python -m server.app
 """
 
 import asyncio
+import gzip
 import logging
 import re
 import time
@@ -39,6 +40,62 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="augment-ce-server", lifespan=lifespan)
+
+
+# ─── Gzip request bodies ──────────────────────────────────────────────────────
+# The Augment client gzips any request body larger than 32 KB and sets
+# Content-Encoding: gzip (notably /batch-upload, which ships full file contents).
+# Starlette does not decompress request bodies, so without this the gzipped bytes
+# reach Pydantic as-is and every large batch-upload fails JSON parsing with 422.
+
+class GzipRequestMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        headers = {k.lower(): v for k, v in scope["headers"]}
+        if b"gzip" not in headers.get(b"content-encoding", b"").lower():
+            return await self.app(scope, receive, send)
+
+        body = b""
+        more_body = True
+        while more_body:
+            message = await receive()
+            body += message.get("body", b"")
+            more_body = message.get("more_body", False)
+
+        try:
+            body = gzip.decompress(body)
+        except (OSError, EOFError) as exc:
+            logger.warning("failed to gunzip request body: %s", exc)
+
+        # Drop Content-Encoding and fix Content-Length so downstream sees plain JSON.
+        new_headers = []
+        for k, v in scope["headers"]:
+            kl = k.lower()
+            if kl == b"content-encoding":
+                continue
+            if kl == b"content-length":
+                v = str(len(body)).encode()
+            new_headers.append((k, v))
+        scope = dict(scope, headers=new_headers)
+
+        sent = False
+
+        async def _receive():
+            nonlocal sent
+            if sent:
+                return {"type": "http.disconnect"}
+            sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        return await self.app(scope, _receive, send)
+
+
+app.add_middleware(GzipRequestMiddleware)
 
 
 # ─── Error mapping ──────────────────────────────────────────────────────────
