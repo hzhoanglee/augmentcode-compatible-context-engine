@@ -88,7 +88,9 @@ class WorkspaceState:
             "last_index_trigger_at": self.last_index_trigger_at,
             "ce_registered": self.ce_registered,
         }
-        tmp = self.state_path.with_suffix(".json.tmp")
+        # Unique tmp name: save() may run from worker threads (asyncio.to_thread),
+        # so concurrent saves must not share a tmp file. os.replace stays atomic.
+        tmp = self.state_path.with_suffix(f".json.{uuid.uuid4().hex[:8]}.tmp")
         tmp.write_text(json.dumps(data))
         os.replace(tmp, self.state_path)
 

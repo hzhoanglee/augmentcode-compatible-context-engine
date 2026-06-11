@@ -15,6 +15,20 @@ class Config:
     data_dir: Path = field(
         default_factory=lambda: Path(os.environ.get("DATA_DIR", "~/.augment-ce")).expanduser()
     )
+    # Max simultaneous HTTP connections to the context engine.
+    ce_max_connections: int = field(
+        default_factory=lambda: int(os.environ.get("CE_MAX_CONNECTIONS", "200"))
+    )
+    # Retrievals running against CE at once; the rest queue (FIFO) instead of
+    # overwhelming the engine or exhausting the connection pool.
+    retrieve_concurrency: int = field(
+        default_factory=lambda: int(os.environ.get("RETRIEVE_CONCURRENCY", "8"))
+    )
+    # Coalescing window for CE index triggers: a burst of batch-uploads sends
+    # one trigger instead of one per request.
+    index_debounce_secs: float = field(
+        default_factory=lambda: float(os.environ.get("INDEX_DEBOUNCE_SECS", "2.0"))
+    )
 
     @property
     def workspaces_dir(self) -> Path:

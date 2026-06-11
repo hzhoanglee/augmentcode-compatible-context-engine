@@ -1434,6 +1434,25 @@ async fn do_query(
     information_request: &str,
     repo: &str,
 ) -> String {
+    // Bound concurrent retrievals: a bulk caller (e.g. the augment-interface
+    // proxy fanning out agent requests) queues here instead of saturating the
+    // embedding/rerank backends and rayon all at once. Permits are taken only
+    // for the query itself — index-wait loops upstream don't hold one. Sized
+    // from settings at first use; a changed value applies after restart.
+    static RETRIEVAL_GATE: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> =
+        std::sync::OnceLock::new();
+    let _permit = if settings.mcp_retrieval_concurrency > 0 {
+        let gate = RETRIEVAL_GATE.get_or_init(|| {
+            Arc::new(tokio::sync::Semaphore::new(settings.mcp_retrieval_concurrency))
+        });
+        match gate.clone().acquire_owned().await {
+            Ok(p) => Some(p),
+            Err(_) => None, // semaphore never closed; defensive
+        }
+    } else {
+        None
+    };
+
     let voyage_client = match VoyageClient::from_config(&settings.embedding) {
         Ok(c) => c,
         Err(e) => return format!("Error: failed to create embedding client: {e}"),

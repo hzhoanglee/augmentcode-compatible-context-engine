@@ -5,6 +5,7 @@ Single-process server (asyncio locks + per-workspace JSON state). Run:
 or  python -m server.app
 """
 
+import asyncio
 import logging
 import re
 import time
@@ -15,8 +16,9 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
+from starlette.requests import ClientDisconnect
 
 import ce_client
 import state
@@ -61,6 +63,15 @@ async def _path_violation(_req: Request, exc: state.PathViolation):
 @app.exception_handler(state.UnknownCheckpoint)
 async def _unknown_checkpoint(_req: Request, exc: state.UnknownCheckpoint):
     return JSONResponse(status_code=400, content={"error": f"unknown checkpoint_id: {exc}"})
+
+
+@app.exception_handler(ClientDisconnect)
+async def _client_disconnect(req: Request, _exc: ClientDisconnect):
+    # The client gave up (timeout/retry/cancel) before we read the body.
+    # Nobody is listening, so any response works — return 499 quietly instead
+    # of letting the exception bubble up as a logged 500.
+    logger.info("client disconnected before request completed: %s", req.url.path)
+    return Response(status_code=499)
 
 
 # ─── Request logging ────────────────────────────────────────────────────────
@@ -152,14 +163,57 @@ def _parse_rfc3339(ts: str | None) -> float | None:
         return None
 
 
-async def _register_and_trigger(ws: Workspace) -> None:
+async def _ensure_registered(ws: Workspace) -> None:
     if not ws.state.ce_registered:
         async with state.ce_registration_lock:
             await ce_client.ensure_registered(ws.state.files_dir)
         ws.state.ce_registered = True
+
+
+async def _register_and_trigger(ws: Workspace) -> None:
+    await _ensure_registered(ws)
     await ce_client.trigger_index(ws.state.files_dir)
-    ws.state.mark_index_triggered()
-    ws.state.save()
+    # Hold the workspace lock for the threaded save: json.dumps in a worker
+    # thread must not race concurrent dict mutations on the event loop.
+    async with ws.lock:
+        ws.state.mark_index_triggered()
+        await asyncio.to_thread(ws.state.save)
+
+
+# ─── Debounced index triggers ───────────────────────────────────────────────
+# A burst of batch-uploads schedules ONE CE trigger per workspace instead of
+# one per request: files are already on disk when the pending trigger fires,
+# so the coalesced run covers them all. The dirty set catches writes that land
+# while a trigger is mid-flight — the worker loops until the workspace is clean.
+
+_pending_triggers: dict[str, asyncio.Task] = {}
+_trigger_dirty: set[str] = set()
+
+
+def schedule_index_trigger(ws: Workspace) -> None:
+    ws_id = ws.state.ws_id
+    _trigger_dirty.add(ws_id)
+    existing = _pending_triggers.get(ws_id)
+    if existing is not None and not existing.done():
+        return
+    _pending_triggers[ws_id] = asyncio.create_task(_fire_trigger(ws))
+
+
+async def _fire_trigger(ws: Workspace) -> None:
+    ws_id = ws.state.ws_id
+    try:
+        while ws_id in _trigger_dirty:
+            await asyncio.sleep(CONFIG.index_debounce_secs)
+            # Clear AFTER the sleep: writes landing during the debounce window
+            # are already on disk and covered by this trigger. Writes landing
+            # during the trigger await re-mark dirty and loop once more.
+            _trigger_dirty.discard(ws_id)
+            await _register_and_trigger(ws)
+    except Exception:
+        _trigger_dirty.discard(ws_id)
+        logger.exception("background index trigger failed for workspace %s", ws_id)
+    finally:
+        _pending_triggers.pop(ws_id, None)
 
 
 def _unlink_files(ws: Workspace, rel_paths: list[str]) -> None:
@@ -260,14 +314,22 @@ async def batch_upload(req: BatchUploadRequest, ws: Workspace = Depends(workspac
                     content={"error": f"file too large: {blob.path}"},
                 )
             targets.append((blob, state.safe_relpath(blob.path, ws.state.files_dir)))
-        for blob, target in targets:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(blob.content, encoding="utf-8")
+
+        def _write_all() -> None:
+            for blob, target in targets:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(blob.content, encoding="utf-8")
+
+        # Disk writes run in a worker thread so a large batch doesn't stall
+        # the event loop (and every other in-flight request) for its duration.
+        await asyncio.to_thread(_write_all)
+        for blob, _target in targets:
             rel = blob.path.replace("\\", "/")
             ws.state.record_upload(blob.blob_name, rel, now)
-        ws.state.save()
+        await asyncio.to_thread(ws.state.save)
 
-    await _register_and_trigger(ws)
+    await _ensure_registered(ws)
+    schedule_index_trigger(ws)
     return {"blob_names": [b.blob_name for b in req.blobs]}
 
 
@@ -275,16 +337,15 @@ async def batch_upload(req: BatchUploadRequest, ws: Workspace = Depends(workspac
 async def checkpoint_blobs(req: CheckpointRequest, ws: Workspace = Depends(workspace)):
     async with ws.lock:
         to_unlink = ws.state.apply_deletions(req.blobs.deleted_blobs)
-        _unlink_files(ws, to_unlink)
+        if to_unlink:
+            await asyncio.to_thread(_unlink_files, ws, to_unlink)
         new_id = ws.state.create_checkpoint(
             req.blobs.checkpoint_id, req.blobs.added_blobs, req.blobs.deleted_blobs
         )
         ws.state.save()
 
     if to_unlink:
-        await ce_client.trigger_index(ws.state.files_dir)
-        ws.state.mark_index_triggered()
-        ws.state.save()
+        schedule_index_trigger(ws)
     return {"new_checkpoint_id": new_id}
 
 
@@ -315,14 +376,12 @@ async def codebase_retrieval(req: RetrievalRequest, ws: Workspace = Depends(work
         )
         to_unlink = ws.state.sync_to_blob_set(active)
         if to_unlink:
-            _unlink_files(ws, to_unlink)
+            await asyncio.to_thread(_unlink_files, ws, to_unlink)
             deleted_any = True
-        ws.state.save()
+        await asyncio.to_thread(ws.state.save)
 
     if deleted_any:
-        await ce_client.trigger_index(ws.state.files_dir)
-        ws.state.mark_index_triggered()
-        ws.state.save()
+        schedule_index_trigger(ws)
 
     result = await ce_client.retrieve(req.information_request, ws.state.files_dir)
     result = _format_for_client(result, ws.state.files_dir)

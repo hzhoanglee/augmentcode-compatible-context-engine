@@ -38,7 +38,11 @@ python -m uvicorn server.app:app --host 127.0.0.1 --port 8787
 ```
 
 Config via env: `AUGMENT_CE_URL` (default `http://127.0.0.1:6699`), `HOST`
-(`127.0.0.1`), `PORT` (`8787`), `DATA_DIR` (`~/.augment-ce`).
+(`127.0.0.1`), `PORT` (`8787`), `DATA_DIR` (`~/.augment-ce`),
+`CE_MAX_CONNECTIONS` (`200`, HTTP connection pool to the engine),
+`RETRIEVE_CONCURRENCY` (`8`, retrievals in flight against the engine — excess
+requests queue), `INDEX_DEBOUNCE_SECS` (`2.0`, coalescing window for engine
+index triggers).
 
 ## Use from the Augment SDK
 
@@ -63,4 +67,5 @@ End-to-end test: `node e2e/e2e.mjs` (with both servers running).
   workspace-absolute paths (`.../workspaces/<id>/files/<relpath>`); the relative
   part matches the paths the client uploaded.
 - The client retries 499/503/5xx; this server returns 503 when the engine is
-  unreachable, 502 for engine errors, 400/401 for terminal client errors.
+  unreachable, 502 for engine errors, 400/401 for terminal client errors, and
+  499 when the client disconnects before the request completes.

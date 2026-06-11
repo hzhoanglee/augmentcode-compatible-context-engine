@@ -308,6 +308,10 @@ fn default_mcp_stale_after_days() -> u64 {
     7
 }
 
+fn default_mcp_retrieval_concurrency() -> usize {
+    8
+}
+
 fn default_enabled_mcp_tools() -> Vec<String> {
     vec![
         "codebase-retrieval".to_string(),
@@ -335,6 +339,12 @@ pub struct Settings {
     /// considered stale for MCP freshness checks.
     #[serde(default = "default_mcp_stale_after_days")]
     pub mcp_stale_after_days: u64,
+    /// Maximum codebase-retrieval queries processed at once (MCP tool, REST
+    /// proxy, and web UI share the funnel). Excess requests queue on the
+    /// semaphore instead of all hammering the embedding/rerank backends and
+    /// rayon at the same time. 0 disables the gate.
+    #[serde(default = "default_mcp_retrieval_concurrency")]
+    pub mcp_retrieval_concurrency: usize,
     /// Resident-byte cap for the per-repo sharded vector index, in megabytes.
     /// Bounds in-RAM embedding storage across all repos; LRU-evicts non-active
     /// repos when exceeded. 0 disables the cap. Defaults to 2048 (~2 GB).
@@ -395,6 +405,7 @@ impl Default for Settings {
             rerank: RerankConfig::default(),
             mcp_index_wait_secs: default_mcp_index_wait_secs(),
             mcp_stale_after_days: default_mcp_stale_after_days(),
+            mcp_retrieval_concurrency: default_mcp_retrieval_concurrency(),
             vector_resident_cap_mb: default_vector_resident_cap_mb(),
             data_dir: None,
             embeddings_dir: None,

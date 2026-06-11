@@ -1,5 +1,6 @@
 """Async client for the vibervn-context-engine HTTP API."""
 
+import asyncio
 import base64
 import logging
 from pathlib import Path
@@ -12,10 +13,14 @@ logger = logging.getLogger("augment-ce.ce")
 
 # CE's /api/mcp-tool may internally wait mcp_index_wait_secs (default 50s)
 # plus rerank/LLM time, so retrieval needs a generous read timeout.
-RETRIEVE_TIMEOUT = httpx.Timeout(connect=5.0, read=180.0, write=10.0, pool=5.0)
-DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
+RETRIEVE_TIMEOUT = httpx.Timeout(connect=5.0, read=180.0, write=10.0, pool=30.0)
+DEFAULT_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=30.0)
 
 client: httpx.AsyncClient | None = None
+# Bounds concurrent retrievals against CE; excess requests wait here (FIFO)
+# rather than piling onto the engine. Created in startup() so it binds to the
+# running event loop.
+_retrieve_gate: asyncio.Semaphore | None = None
 
 
 class CEUnavailable(Exception):
@@ -37,8 +42,13 @@ def repo_id(files_dir: Path) -> str:
 
 
 async def startup() -> None:
-    global client
-    client = httpx.AsyncClient(base_url=CONFIG.ce_url, timeout=DEFAULT_TIMEOUT)
+    global client, _retrieve_gate
+    limits = httpx.Limits(
+        max_connections=CONFIG.ce_max_connections,
+        max_keepalive_connections=min(CONFIG.ce_max_connections, 50),
+    )
+    client = httpx.AsyncClient(base_url=CONFIG.ce_url, timeout=DEFAULT_TIMEOUT, limits=limits)
+    _retrieve_gate = asyncio.Semaphore(CONFIG.retrieve_concurrency)
 
 
 async def shutdown() -> None:
@@ -93,15 +103,17 @@ async def trigger_index(files_dir: Path) -> None:
 
 
 async def retrieve(information_request: str, files_dir: Path) -> str:
-    resp = await _request(
-        "POST",
-        "/api/mcp-tool",
-        json={
-            "information_request": information_request,
-            "workspace_full_path": normalize_repo_path(str(files_dir)),
-        },
-        timeout=RETRIEVE_TIMEOUT,
-    )
+    assert _retrieve_gate is not None, "ce_client.startup() not called"
+    async with _retrieve_gate:
+        resp = await _request(
+            "POST",
+            "/api/mcp-tool",
+            json={
+                "information_request": information_request,
+                "workspace_full_path": normalize_repo_path(str(files_dir)),
+            },
+            timeout=RETRIEVE_TIMEOUT,
+        )
     if resp.status_code >= 400:
         raise CEError(f"retrieval failed ({resp.status_code}): {resp.text[:500]}")
     return resp.json().get("result", "")
