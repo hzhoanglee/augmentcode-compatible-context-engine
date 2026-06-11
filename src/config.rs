@@ -9,14 +9,14 @@ use serde_json::Value;
 use tempfile::NamedTempFile;
 
 /// Bump this when a new migration is appended to MIGRATIONS.
-pub const CURRENT_VERSION: u32 = 7;
+pub const CURRENT_VERSION: u32 = 6;
 
 /// Migration function type: transforms a JSON Value from version N to version N+1.
 pub type MigrationFn = fn(Value) -> Result<Value, ConfigError>;
 
 /// Ordered list of migration functions. Each entry migrates from version N to N+1,
 /// where N is the index into this slice (0-based, so index 0 = v1→v2, etc.).
-pub const MIGRATIONS: &[MigrationFn] = &[migrate_v1_to_v2, migrate_v2_to_v3, migrate_v3_to_v4, migrate_v4_to_v5, migrate_v5_to_v6, migrate_v6_to_v7];
+pub const MIGRATIONS: &[MigrationFn] = &[migrate_v1_to_v2, migrate_v2_to_v3, migrate_v3_to_v4, migrate_v4_to_v5, migrate_v5_to_v6];
 
 /// v1→v2: introduce `data_dir` (Option<PathBuf>). The body is a no-op stamp —
 /// `serde(default)` already handles missing fields on deserialize, but we
@@ -84,19 +84,6 @@ fn migrate_v5_to_v6(mut value: Value) -> Result<Value, ConfigError> {
     Ok(value)
 }
 
-/// v6→v7: introduce `embedding.voyage_base_url` (Option<String>). Allows
-/// overriding the Voyage AI endpoint (proxy, self-hosted compatible API).
-/// `None` / null means the default `https://api.voyageai.com/v1/embeddings`.
-fn migrate_v6_to_v7(mut value: Value) -> Result<Value, ConfigError> {
-    if let Value::Object(ref mut obj) = value
-        && let Some(Value::Object(emb)) = obj.get_mut("embedding")
-    {
-        emb.entry("voyage_base_url".to_string())
-            .or_insert(Value::Null);
-    }
-    Ok(value)
-}
-
 // ─── Settings ──────────────────────────────────────────────────────────────
 
 fn default_index_ignore_filenames() -> Vec<String> {
@@ -119,6 +106,13 @@ fn default_vector_resident_cap_mb() -> usize {
     2048
 }
 
+fn default_embed_batch_size() -> usize {
+    // Texts per embeddings request. Voyage accepts up to 128; many
+    // OpenAI-compatible gateways enforce far lower input limits (e.g.
+    // BytePlus Ark caps at 10) — lower this to match your provider.
+    128
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EmbeddingConfig {
     pub provider: String,
@@ -129,13 +123,15 @@ pub struct EmbeddingConfig {
     /// Defaults to 16.
     #[serde(default = "default_embed_concurrency")]
     pub embed_concurrency: usize,
-    /// Custom Voyage AI-compatible endpoint. Honored only when
-    /// `provider == "voyage"`. `None` / blank → the client falls back to
-    /// `https://api.voyageai.com/v1/embeddings`. Accepts either the base form
-    /// (`…/v1`) or the full `…/v1/embeddings` URL — normalization is
-    /// centralized in `embedding::voyage::voyage_url`.
+    /// Custom OpenAI-compatible embeddings endpoint (LM Studio, GPUStack,
+    /// Ollama, vLLM, etc.). Honored only when `provider == "openai"`. Accepts
+    /// the base form (`…/v1`) or the full `…/v1/embeddings` URL.
     #[serde(default)]
-    pub voyage_base_url: Option<String>,
+    pub base_url: Option<String>,
+    /// Max texts per embeddings request. Defaults to 128 (Voyage's limit);
+    /// set to your provider's input cap (e.g. 10 for BytePlus Ark).
+    #[serde(default = "default_embed_batch_size")]
+    pub embed_batch_size: usize,
 }
 
 impl Default for EmbeddingConfig {
@@ -145,8 +141,79 @@ impl Default for EmbeddingConfig {
             model: "voyage-4-lite".to_owned(),
             api_keys: Vec::new(),
             embed_concurrency: default_embed_concurrency(),
-            voyage_base_url: None,
+            base_url: None,
+            embed_batch_size: default_embed_batch_size(),
         }
+    }
+}
+
+impl EmbeddingConfig {
+    /// Whether the embedding backend is usable. Voyage requires at least one
+    /// API key; OpenAI-compatible endpoints only require a base_url (local
+    /// servers often run without auth).
+    pub fn is_configured(&self) -> bool {
+        if self.provider == "openai" {
+            self.base_url
+                .as_deref()
+                .is_some_and(|s| !s.trim().is_empty())
+        } else {
+            !self.api_keys.is_empty()
+        }
+    }
+}
+
+fn default_rerank_provider() -> String {
+    "lmstudio".to_owned()
+}
+
+/// Dedicated embedding-similarity rerank configuration.
+///
+/// Providers:
+///   lmstudio - LM Studio (or any OpenAI-compatible /v1/embeddings server) used
+///              as an embedding-similarity reranker. Default, no API key needed.
+///              LM Studio does not expose /v1/rerank, so we embed the query and
+///              the candidate documents via /v1/embeddings and rank by cosine
+///              similarity.
+///   none     - disable; fall back to the LLM-prompt reranker (settings.llm).
+///
+/// Active only when `base_url` and `model` are set; otherwise the engine
+/// behaves as if provider were "none".
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RerankConfig {
+    #[serde(default = "default_rerank_provider")]
+    pub provider: String,
+    /// Base URL (`…/v1`) or full `…/v1/embeddings` URL of the embedding server.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Embedding model used for similarity scoring, e.g.
+    /// "gpustack/text-embedding-bge-reranker-v2-m3".
+    #[serde(default)]
+    pub model: String,
+    /// Bearer keys, rotated round-robin. May be empty for unauthenticated hosts.
+    #[serde(default)]
+    pub api_keys: Vec<String>,
+}
+
+impl Default for RerankConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_rerank_provider(),
+            base_url: None,
+            model: String::new(),
+            api_keys: Vec::new(),
+        }
+    }
+}
+
+impl RerankConfig {
+    /// Whether the embedding-similarity rerank path should be used.
+    pub fn is_active(&self) -> bool {
+        self.provider == "lmstudio"
+            && self
+                .base_url
+                .as_deref()
+                .is_some_and(|s| !s.trim().is_empty())
+            && !self.model.trim().is_empty()
     }
 }
 
@@ -256,6 +323,10 @@ pub struct Settings {
     pub repos: Vec<String>,
     pub embedding: EmbeddingConfig,
     pub llm: LlmConfig,
+    /// Dedicated /v1/rerank endpoint config. When active it takes precedence
+    /// over the LLM-prompt reranker for candidate ordering.
+    #[serde(default)]
+    pub rerank: RerankConfig,
     /// Maximum wall-clock seconds the MCP tool will wait for indexing to finish
     /// before returning a partial/error response.
     #[serde(default = "default_mcp_index_wait_secs")]
@@ -321,6 +392,7 @@ impl Default for Settings {
             repos: Vec::new(),
             embedding: EmbeddingConfig::default(),
             llm: LlmConfig::default(),
+            rerank: RerankConfig::default(),
             mcp_index_wait_secs: default_mcp_index_wait_secs(),
             mcp_stale_after_days: default_mcp_stale_after_days(),
             vector_resident_cap_mb: default_vector_resident_cap_mb(),
@@ -900,74 +972,6 @@ mod tests {
             loaded.llm.openai_base_url.as_deref(),
             Some("http://localhost:11434/v1"),
             "openai_base_url must round-trip through write+load"
-        );
-        assert_eq!(loaded.version, CURRENT_VERSION);
-    }
-
-    #[test]
-    fn test_v6_to_v7_migration_stamps_null_voyage_base_url() {
-        let home = TempDir::new().expect("tempdir");
-        let path = config_path(home.path());
-        fs::create_dir_all(path.parent().expect("has parent")).expect("create dirs");
-
-        let v6 = r#"{
-            "version": 6,
-            "repos": [],
-            "embedding": {"provider":"voyage","model":"voyage-4-lite","api_keys":[],"embed_concurrency":16},
-            "llm": {"provider":"google","rerank_model":"gemini-3.1-flash-lite","api_keys":[]},
-            "data_dir": null,
-            "embeddings_dir": null,
-            "enabled_mcp_tools": ["codebase-retrieval","file-retrieval"],
-            "custom_extensions": [],
-            "index_ignore_filenames": ["CLAUDE.md","AGENTS.md"]
-        }"#;
-        fs::write(&path, v6).expect("write v6 settings.json");
-
-        let loaded = ensure_dir_and_load(home.path()).expect("load v6");
-        assert_eq!(loaded.version, CURRENT_VERSION);
-        assert!(
-            loaded.embedding.voyage_base_url.is_none(),
-            "voyage_base_url must default to None after v6→v7 migration"
-        );
-
-        let raw = fs::read_to_string(&path).expect("re-read");
-        let v: Value = serde_json::from_str(&raw).expect("parse re-read");
-        assert_eq!(v.get("version").and_then(|x| x.as_u64()), Some(CURRENT_VERSION as u64));
-        let emb = v.get("embedding").expect("embedding key");
-        assert!(
-            emb.get("voyage_base_url").map(|x| x.is_null()).unwrap_or(false),
-            "on-disk voyage_base_url should be explicit null after migration, got: {:?}",
-            emb.get("voyage_base_url")
-        );
-    }
-
-    #[test]
-    fn test_embedding_config_deserializes_without_voyage_base_url() {
-        let json = r#"{"provider":"voyage","model":"voyage-4-lite","api_keys":["k"],"embed_concurrency":16}"#;
-        let cfg: EmbeddingConfig = serde_json::from_str(json).expect("deserialize old embedding block");
-        assert!(cfg.voyage_base_url.is_none(), "voyage_base_url must default to None on old files");
-    }
-
-    #[test]
-    fn test_embedding_config_round_trips_voyage_base_url() {
-        let home = TempDir::new().expect("tempdir");
-        let path = config_path(home.path());
-        fs::create_dir_all(path.parent().expect("has parent")).expect("create dirs");
-
-        let s = Settings {
-            embedding: EmbeddingConfig {
-                voyage_base_url: Some("https://my-proxy.com/v1".to_owned()),
-                ..EmbeddingConfig::default()
-            },
-            ..Settings::default()
-        };
-        write_settings_atomic(&path, &s).expect("write");
-
-        let loaded = ensure_dir_and_load(home.path()).expect("load");
-        assert_eq!(
-            loaded.embedding.voyage_base_url.as_deref(),
-            Some("https://my-proxy.com/v1"),
-            "voyage_base_url must round-trip through write+load"
         );
         assert_eq!(loaded.version, CURRENT_VERSION);
     }

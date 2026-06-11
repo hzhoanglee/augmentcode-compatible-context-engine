@@ -669,10 +669,10 @@ pub async fn run_codebase_retrieval(
         index_engine.register_repo(repo).await;
     }
 
-    // 3. Confirm embedding keys are present.
-    if settings.embedding.api_keys.is_empty() {
-        return "Error: no embedding API keys configured. \
-                Add a Voyage AI key in the Context Engine UI first."
+    // 3. Confirm the embedding backend is configured.
+    if !settings.embedding.is_configured() {
+        return "Error: embedding backend not configured. \
+                Add a Voyage AI key (or an OpenAI-compatible base_url) in the Context Engine UI first."
             .to_string();
     }
 
@@ -1434,16 +1434,25 @@ async fn do_query(
     information_request: &str,
     repo: &str,
 ) -> String {
-    let voyage_client = match VoyageClient::new(
-        settings.embedding.model.clone(),
-        settings.embedding.api_keys.clone(),
-        settings.embedding.voyage_base_url.as_deref(),
-    ) {
+    let voyage_client = match VoyageClient::from_config(&settings.embedding) {
         Ok(c) => c,
         Err(e) => return format!("Error: failed to create embedding client: {e}"),
     };
 
     let llm_client: Option<LlmClient> = LlmClient::new(&settings.llm);
+
+    // Dedicated embedding-similarity reranker (takes precedence when active).
+    let rerank_client = if settings.rerank.is_active() {
+        match VoyageClient::from_rerank_config(&settings.rerank) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to create rerank client; falling back to LLM rerank");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     match crate::query::run_query(
         information_request,
@@ -1454,6 +1463,7 @@ async fn do_query(
         repo_dbs,
         settings.llm.rerank_min_prune_lines,
         llm_client.as_ref(),
+        rerank_client.as_ref(),
         Duration::from_secs(settings.mcp_index_wait_secs),
         settings.llm.agentic_rag,
         settings.llm.agentic_rag_max_turns,
@@ -1558,8 +1568,8 @@ pub async fn run_file_retrieval(
         return "Error: information_request is required.".to_string();
     }
 
-    if settings.embedding.api_keys.is_empty() {
-        return "Error: no embedding API keys configured.".to_string();
+    if !settings.embedding.is_configured() {
+        return "Error: embedding backend not configured.".to_string();
     }
 
     // Open DB for this repo.
@@ -1581,11 +1591,7 @@ pub async fn run_file_retrieval(
     }
 
     // Embed the query.
-    let voyage_client = match VoyageClient::new(
-        settings.embedding.model.clone(),
-        settings.embedding.api_keys.clone(),
-        settings.embedding.voyage_base_url.as_deref(),
-    ) {
+    let voyage_client = match VoyageClient::from_config(&settings.embedding) {
         Ok(c) => c,
         Err(e) => return format!("Error: failed to create embedding client: {e}"),
     };

@@ -217,7 +217,32 @@
                   class="border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm
                          focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active">
             <option value="voyage">Voyage AI</option>
+            <option value="openai">OpenAI-compatible</option>
           </select>
+        </div>
+        <div id="embedding-base-url-wrapper" class="mb-4 hidden">
+          <label class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1" for="embedding-base-url">
+            Base URL
+          </label>
+          <input id="embedding-base-url" type="text" placeholder="http://localhost:1234/v1"
+                 class="w-full border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm font-mono
+                        placeholder:text-gray-400 dark:placeholder:text-wiki-text-muted
+                        focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
+          <p class="mt-1 text-xs text-gray-400 dark:text-wiki-text-muted">
+            OpenAI-compatible /v1/embeddings server (LM Studio, GPUStack, Ollama, vLLM, …). Accepts the base form (…/v1) or the full /embeddings URL. API keys are optional for unauthenticated local servers.
+          </p>
+        </div>
+        <div class="mb-4">
+          <label class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1" for="embedding-batch-size">
+            Max texts per request
+          </label>
+          <input id="embedding-batch-size" type="number" min="1" max="128" placeholder="128"
+                 class="border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm
+                        placeholder:text-gray-400 dark:placeholder:text-wiki-text-muted
+                        focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
+          <p class="mt-1 text-xs text-gray-400 dark:text-wiki-text-muted">
+            Providers enforce different input caps per embeddings request: Voyage 128, BytePlus Ark 10. Lower this if you see "input limit exceeded" errors.
+          </p>
         </div>
         <div class="mb-4">
           <label data-i18n="embed.model" class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1" for="embedding-model">
@@ -227,18 +252,6 @@
                  class="w-full border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm
                         placeholder:text-gray-400 dark:placeholder:text-wiki-text-muted
                         focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
-        </div>
-        <div class="mb-4">
-          <label data-i18n="embed.baseUrl" class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1" for="embedding-base-url">
-            Base URL
-          </label>
-          <input id="embedding-base-url" type="text" placeholder="https://api.voyageai.com/v1" data-i18n-ph="embed.baseUrlPlaceholder"
-                 class="w-full border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm font-mono
-                        placeholder:text-gray-400 dark:placeholder:text-wiki-text-muted
-                        focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
-          <p data-i18n="embed.baseUrlHelp" class="mt-1 text-xs text-gray-400 dark:text-wiki-text-muted">
-            Custom Voyage AI-compatible endpoint. Leave blank to use api.voyageai.com. Accepts either the base form (…/v1) or the full /v1/embeddings URL.
-          </p>
         </div>
         <div class="mb-4">
           <label data-i18n="embed.concurrency" class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1" for="embedding-concurrency">
@@ -397,6 +410,54 @@
         </div>
         <form id="form-add-llm-key" class="flex gap-2" onsubmit="return false;">
           <input id="input-llm-key" type="text" placeholder="Paste API key" data-i18n-ph="field.pasteKey"
+                 class="flex-1 border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm font-mono
+                        placeholder:text-gray-400 dark:placeholder:text-wiki-text-muted
+                        focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
+          <button type="submit" data-i18n="action.add"
+                  class="px-4 py-2 bg-blue-600 dark:bg-wiki-border-active/20 dark:border dark:border-wiki-border-active text-white dark:text-wiki-link text-sm rounded
+                         hover:bg-blue-700 dark:hover:bg-wiki-border-active/30 focus:outline-none focus:ring-2 focus:ring-blue-400">
+            Add
+          </button>
+        </form>
+      </section>
+
+      <!-- Embedding-similarity Reranker -->
+      <section class="mb-8 pt-6 border-t border-gray-200 dark:border-wiki-border">
+        <h2 class="font-wiki text-xl dark:text-wiki-heading text-gray-900 border-b border-gray-200 dark:border-wiki-border pb-2 mb-4">
+          Embedding Reranker
+        </h2>
+        <p class="mb-4 text-xs text-gray-400 dark:text-wiki-text-muted">
+          Rerank candidates by cosine similarity against a dedicated embedding model served from an OpenAI-compatible /v1/embeddings endpoint (LM Studio, GPUStack, …). When active, this replaces the LLM reranker above.
+        </p>
+        <div class="mb-4">
+          <label class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1">Provider</label>
+          <select id="rerank-provider"
+                  class="border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm
+                         focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active">
+            <option value="lmstudio">LM Studio / OpenAI-compatible embeddings</option>
+            <option value="none">Disabled (use LLM reranker)</option>
+          </select>
+        </div>
+        <div class="mb-4">
+          <label class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1" for="rerank-base-url">Base URL</label>
+          <input id="rerank-base-url" type="text" placeholder="http://localhost:1234/v1"
+                 class="w-full border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm font-mono
+                        placeholder:text-gray-400 dark:placeholder:text-wiki-text-muted
+                        focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
+        </div>
+        <div class="mb-4">
+          <label class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1" for="rerank-model">Rerank embedding model</label>
+          <input id="rerank-model" type="text" placeholder="e.g. gpustack/text-embedding-bge-reranker-v2-m3"
+                 class="w-full border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm
+                        placeholder:text-gray-400 dark:placeholder:text-wiki-text-muted
+                        focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
+        </div>
+        <div class="mb-2">
+          <label class="block text-xs font-medium text-gray-500 dark:text-wiki-text-muted mb-1">API keys (optional)</label>
+          <div id="rerank-keys-list" class="space-y-2 mb-2"></div>
+        </div>
+        <form id="form-add-rerank-key" class="flex gap-2" onsubmit="return false;">
+          <input id="input-rerank-key" type="text" placeholder="Paste API key" data-i18n-ph="field.pasteKey"
                  class="flex-1 border border-gray-200 dark:border-wiki-border bg-white dark:bg-wiki-surface text-gray-900 dark:text-wiki-text rounded px-3 py-2 text-sm font-mono
                         placeholder:text-gray-400 dark:placeholder:text-wiki-text-muted
                         focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-blue-400 dark:focus:border-wiki-border-active" />
@@ -1122,11 +1183,6 @@ const STR = {
   // Settings — Embedding
   'embed.heading':     { en: `Embedding Provider`, vi: `Embedding Provider`, zh: `嵌入向量提供商` },
   'embed.model':       { en: `Embedding model`, vi: `Embedding model`, zh: `嵌入模型` },
-  'embed.baseUrl':     { en: `Base URL`, vi: `Base URL`, zh: `Base URL` },
-  'embed.baseUrlHelp': { en: `Custom Voyage AI-compatible endpoint. Leave blank to use api.voyageai.com. Accepts either the base form (…/v1) or the full /v1/embeddings URL.`,
-                         vi: `Endpoint tương thích Voyage AI. Để trống để dùng api.voyageai.com. Chấp nhận dạng base (…/v1) hoặc URL đầy đủ /v1/embeddings.`,
-                         zh: `自定义 Voyage AI 兼容 endpoint。留空使用 api.voyageai.com。接受 base 形式（…/v1）或完整的 /v1/embeddings URL。` },
-  'embed.baseUrlPlaceholder': { en: `https://api.voyageai.com/v1`, vi: `https://api.voyageai.com/v1`, zh: `https://api.voyageai.com/v1` },
   'embed.concurrency': { en: `Concurrent batches per key`, vi: `Số batch đồng thời mỗi key`, zh: `每个密钥的并发批次数` },
   'field.provider':    { en: `Provider`, vi: `Provider`, zh: `提供商` },
   'field.apiKeys':     { en: `API keys`, vi: `API key`, zh: `API 密钥` },
@@ -1509,11 +1565,6 @@ function maskKey(k) {
   return '••••••••' + k.slice(-4);
 }
 
-function isValidUrl(s) {
-  try { const u = new URL(s); return u.protocol === 'http:' || u.protocol === 'https:'; }
-  catch { return false; }
-}
-
 function showToast() {
   const t = document.getElementById('toast-saved');
   t.classList.remove('hidden');
@@ -1746,10 +1797,13 @@ function renderKeyList(containerId, keys, onRemove) {
 
 function renderAll() {
   renderRepos();
+  if (!cfg.rerank) cfg.rerank = { provider: 'lmstudio', base_url: null, model: '', api_keys: [] };
   document.getElementById('embedding-provider').value = cfg.embedding.provider || 'voyage';
   document.getElementById('embedding-model').value = cfg.embedding.model || '';
-  document.getElementById('embedding-base-url').value = cfg.embedding.voyage_base_url || '';
+  document.getElementById('embedding-base-url').value = cfg.embedding.base_url || '';
+  document.getElementById('embedding-base-url-wrapper').classList.toggle('hidden', (cfg.embedding.provider || 'voyage') !== 'openai');
   document.getElementById('embedding-concurrency').value = cfg.embedding.embed_concurrency ?? 16;
+  document.getElementById('embedding-batch-size').value = cfg.embedding.embed_batch_size ?? 128;
   renderKeyList('embedding-keys-list', cfg.embedding.api_keys, (idx) => {
     cfg.embedding.api_keys.splice(idx, 1);
     renderAll();
@@ -1771,6 +1825,14 @@ function renderAll() {
   document.getElementById('llm-openai-force-tool-use-wrapper').classList.toggle('hidden', !showForceToolUse);
   renderKeyList('llm-keys-list', cfg.llm.api_keys, (idx) => {
     cfg.llm.api_keys.splice(idx, 1);
+    renderAll();
+    saveNow();
+  });
+  document.getElementById('rerank-provider').value = cfg.rerank.provider || 'lmstudio';
+  document.getElementById('rerank-base-url').value = cfg.rerank.base_url || '';
+  document.getElementById('rerank-model').value = cfg.rerank.model || '';
+  renderKeyList('rerank-keys-list', cfg.rerank.api_keys || [], (idx) => {
+    cfg.rerank.api_keys.splice(idx, 1);
     renderAll();
     saveNow();
   });
@@ -1821,6 +1883,9 @@ function saveDebounced() {
 // ─── First-use detection ──────────────────────────────────────────────────
 function needsSetup() {
   if (!cfg) return false;
+  if (cfg.embedding.provider === 'openai') {
+    return !(cfg.embedding.base_url || '').trim();
+  }
   return !cfg.embedding.api_keys || cfg.embedding.api_keys.length === 0;
 }
 
@@ -1916,6 +1981,22 @@ document.getElementById('input-llm-key').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); handleAddLlmKey(); }
 });
 
+function handleAddRerankKey() {
+  const input = document.getElementById('input-rerank-key');
+  const val = input.value.trim();
+  if (!val) return;
+  if (!cfg.rerank) cfg.rerank = { provider: 'lmstudio', base_url: null, model: '', api_keys: [] };
+  if (!cfg.rerank.api_keys) cfg.rerank.api_keys = [];
+  cfg.rerank.api_keys.push(val);
+  input.value = '';
+  renderAll();
+  saveNow();
+}
+document.getElementById('form-add-rerank-key').addEventListener('submit', handleAddRerankKey);
+document.getElementById('input-rerank-key').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); handleAddRerankKey(); }
+});
+
 function renderExtensionList() {
   const container = document.getElementById('custom-extensions-list');
   container.innerHTML = '';
@@ -2008,17 +2089,16 @@ document.getElementById('input-ignore-filename').addEventListener('keydown', (e)
 document.getElementById('embedding-model').addEventListener('input', (e) => {
   if (cfg) { cfg.embedding.model = e.target.value; saveDebounced(); }
 });
-document.getElementById('embedding-base-url').addEventListener('input', (e) => {
-  if (!cfg) return;
-  const v = e.target.value.trim();
-  if (v !== '' && !isValidUrl(v)) return;
-  cfg.embedding.voyage_base_url = v === '' ? null : v;
-  saveDebounced();
-});
 document.getElementById('embedding-concurrency').addEventListener('input', (e) => {
   if (!cfg) return;
   const n = parseInt(e.target.value, 10);
   cfg.embedding.embed_concurrency = (Number.isInteger(n) && n > 0) ? n : 16;
+  saveDebounced();
+});
+document.getElementById('embedding-batch-size').addEventListener('input', (e) => {
+  if (!cfg) return;
+  const n = parseInt(e.target.value, 10);
+  cfg.embedding.embed_batch_size = (Number.isInteger(n) && n > 0) ? Math.min(n, 128) : 128;
   saveDebounced();
 });
 document.getElementById('llm-rerank-model').addEventListener('input', (e) => {
@@ -2064,7 +2144,37 @@ function syncEnabledMcpTools() {
 document.getElementById('mcp-tool-codebase-retrieval').addEventListener('change', syncEnabledMcpTools);
 document.getElementById('mcp-tool-file-retrieval').addEventListener('change', syncEnabledMcpTools);
 document.getElementById('embedding-provider').addEventListener('change', (e) => {
-  if (cfg) { cfg.embedding.provider = e.target.value; saveNow(); }
+  if (cfg) {
+    cfg.embedding.provider = e.target.value;
+    document.getElementById('embedding-base-url-wrapper').classList.toggle('hidden', e.target.value !== 'openai');
+    saveNow();
+  }
+});
+document.getElementById('embedding-base-url').addEventListener('input', (e) => {
+  if (!cfg) return;
+  const v = e.target.value.trim();
+  cfg.embedding.base_url = v === '' ? null : v;
+  saveDebounced();
+});
+document.getElementById('rerank-provider').addEventListener('change', (e) => {
+  if (cfg) {
+    if (!cfg.rerank) cfg.rerank = { provider: 'lmstudio', base_url: null, model: '', api_keys: [] };
+    cfg.rerank.provider = e.target.value;
+    saveNow();
+  }
+});
+document.getElementById('rerank-base-url').addEventListener('input', (e) => {
+  if (!cfg) return;
+  if (!cfg.rerank) cfg.rerank = { provider: 'lmstudio', base_url: null, model: '', api_keys: [] };
+  const v = e.target.value.trim();
+  cfg.rerank.base_url = v === '' ? null : v;
+  saveDebounced();
+});
+document.getElementById('rerank-model').addEventListener('input', (e) => {
+  if (!cfg) return;
+  if (!cfg.rerank) cfg.rerank = { provider: 'lmstudio', base_url: null, model: '', api_keys: [] };
+  cfg.rerank.model = e.target.value.trim();
+  saveDebounced();
 });
 document.getElementById('llm-provider').addEventListener('change', (e) => {
   if (cfg) {

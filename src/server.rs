@@ -282,15 +282,6 @@ async fn put_config(
     // Server always stamps the current version regardless of what the client sent.
     settings.version = CURRENT_VERSION;
 
-    // Validate voyage_base_url if provided.
-    if let Some(ref url) = settings.embedding.voyage_base_url {
-        let trimmed = url.trim();
-        if !trimmed.is_empty() && reqwest::Url::parse(trimmed).is_err() {
-            let body = json!({ "error": "embedding.voyage_base_url is not a valid URL" });
-            return (StatusCode::BAD_REQUEST, Json(body)).into_response();
-        }
-    }
-
     // Normalize repo paths to OS-native separators so D:/foo and D:\foo unify.
     settings.repos = settings
         .repos
@@ -879,17 +870,13 @@ async fn post_query(
     // A hard "index is empty" rejection here would falsely block queries to
     // populated-but-cold repos. Truly-unindexed setups simply return no results.
 
-    if settings.embedding.api_keys.is_empty() {
-        let body = json!({ "error": "No embedding API keys configured." });
+    if !settings.embedding.is_configured() {
+        let body = json!({ "error": "Embedding backend not configured (Voyage needs an API key; openai provider needs a base_url)." });
         return (StatusCode::BAD_REQUEST, Json(body)).into_response();
     }
 
     // Build voyage client.
-    let voyage_client = match VoyageClient::new(
-        settings.embedding.model.clone(),
-        settings.embedding.api_keys.clone(),
-        settings.embedding.voyage_base_url.as_deref(),
-    ) {
+    let voyage_client = match VoyageClient::from_config(&settings.embedding) {
         Ok(c) => c,
         Err(e) => {
             let body = json!({ "error": format!("failed to create embedding client: {e}") });
@@ -900,6 +887,19 @@ async fn post_query(
     // Build LLM client for reranking (None if no keys configured or rerank disabled).
     let llm_client = if req.rerank {
         LlmClient::new(&settings.llm)
+    } else {
+        None
+    };
+
+    // Dedicated embedding-similarity reranker (takes precedence when active).
+    let rerank_client = if req.rerank && settings.rerank.is_active() {
+        match VoyageClient::from_rerank_config(&settings.rerank) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to create rerank client; falling back to LLM rerank");
+                None
+            }
+        }
     } else {
         None
     };
@@ -926,6 +926,7 @@ async fn post_query(
         &state.repo_dbs,
         settings.llm.rerank_min_prune_lines,
         llm_client.as_ref(),
+        rerank_client.as_ref(),
         std::time::Duration::from_secs(settings.mcp_index_wait_secs),
         settings.llm.agentic_rag,
         settings.llm.agentic_rag_max_turns,

@@ -639,16 +639,12 @@ async fn run_consumer(
             status.total_files = 0;
         }
 
-        // Build embedding client — skip if no keys configured.
-        let voyage_client = if settings_ref.embedding.api_keys.is_empty() {
-            info!(repo = %repo, "no embedding API keys configured, skipping embed");
+        // Build embedding client — skip if the backend isn't configured.
+        let voyage_client = if !settings_ref.embedding.is_configured() {
+            info!(repo = %repo, "embedding backend not configured, skipping embed");
             None
         } else {
-            match VoyageClient::new(
-                settings_ref.embedding.model.clone(),
-                settings_ref.embedding.api_keys.clone(),
-                settings_ref.embedding.voyage_base_url.as_deref(),
-            ) {
+            match VoyageClient::from_config(&settings_ref.embedding) {
                 Ok(c) => Some(c),
                 Err(e) => {
                     error!(repo = %repo, error = %e, "failed to create voyage client");

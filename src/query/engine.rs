@@ -88,6 +88,8 @@ struct ChunkContentRow {
 ///
 /// `repo_filter`: if Some, only return results from that repo path prefix.
 /// `llm_client`: if None, rerank step is skipped.
+/// `rerank_client`: dedicated embedding-similarity reranker; when Some it takes
+///   precedence over the LLM reranker (and over agentic RAG).
 /// `warm_wait`: max time to block warming a cold single-repo shard before search.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_query(
@@ -99,6 +101,7 @@ pub async fn run_query(
     repo_dbs: &Arc<RwLock<HashMap<String, Surreal<Db>>>>,
     min_prune_lines: u32,
     llm_client: Option<&LlmClient>,
+    rerank_client: Option<&VoyageClient>,
     warm_wait: std::time::Duration,
     agentic_rag: bool,
     agentic_rag_max_turns: u32,
@@ -106,7 +109,7 @@ pub async fn run_query(
 ) -> Result<QueryResult> {
     run_query_with_filters(
         query, top_k, repo_filter, voyage_client, index_engine, repo_dbs,
-        min_prune_lines, llm_client, warm_wait, agentic_rag,
+        min_prune_lines, llm_client, rerank_client, warm_wait, agentic_rag,
         agentic_rag_max_turns, agentic_rag_max_chunk_chars, None,
     ).await
 }
@@ -123,6 +126,7 @@ pub async fn run_query_with_filters(
     repo_dbs: &Arc<RwLock<HashMap<String, Surreal<Db>>>>,
     min_prune_lines: u32,
     llm_client: Option<&LlmClient>,
+    rerank_client: Option<&VoyageClient>,
     warm_wait: std::time::Duration,
     agentic_rag: bool,
     agentic_rag_max_turns: u32,
@@ -271,8 +275,13 @@ pub async fn run_query_with_filters(
     // the base candidates followed by any `query`-tool results, and the returned
     // indices address THAT pool. On the single-shot path it's None and indices
     // address the base `merged`/`numbered`.
-    let (rerank_output, extended_pool) = match (agentic_rag, llm_client, repo_filter) {
-        (true, Some(client), Some(repo)) => {
+    let (rerank_output, extended_pool) = match (rerank_client, agentic_rag, llm_client, repo_filter) {
+        // Dedicated embedding-similarity reranker takes precedence.
+        (Some(rc), _, _, _) => {
+            let out = reranker::rerank_by_embedding(query, &merged, &numbered, rc).await;
+            (out, None)
+        }
+        (None, true, Some(client), Some(repo)) => {
             let (out, pool) = reranker::rerank_agentic(
                 query, &merged, &numbered, &legacy_stats, min_prune_lines,
                 client, agentic_rag_max_turns, agentic_rag_max_chunk_chars,

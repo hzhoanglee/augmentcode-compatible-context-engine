@@ -196,6 +196,107 @@ pub async fn rerank(
     }
 }
 
+// ─── Embedding-similarity rerank ─────────────────────────────────────────
+
+/// Rerank by embedding similarity against a dedicated rerank embedding model
+/// (LM Studio / any OpenAI-compatible /v1/embeddings server — e.g. a
+/// bge-reranker checkpoint served as an embedding model). The query and each
+/// candidate chunk are embedded and candidates are ordered by cosine
+/// similarity, descending. No chunks are dropped and no line pruning happens —
+/// this is a pure reordering pass.
+pub async fn rerank_by_embedding(
+    query: &str,
+    chunks: &[MergeChunk],
+    numbered: &[Option<String>],
+    client: &VoyageClient,
+) -> RerankOutput {
+    let n = chunks.len();
+    let all_indices: Vec<usize> = (0..n).collect();
+    if chunks.is_empty() {
+        return RerankOutput {
+            reranked_indices: vec![],
+            line_selections: vec![],
+            raw_request: String::new(),
+            raw_response: String::new(),
+            elapsed_ms: 0,
+            fallback_used: false,
+            skip_reason: None,
+        };
+    }
+
+    // Same content the LLM reranker would see: disk-numbered text when
+    // available, stored content otherwise, truncated to bound request size.
+    let docs: Vec<String> = chunks
+        .iter()
+        .enumerate()
+        .map(|(i, chunk)| {
+            let raw = numbered
+                .get(i)
+                .and_then(|c| c.as_deref())
+                .unwrap_or(&chunk.content);
+            format!("{}\n{}", chunk.file, truncate_content(raw, 100))
+        })
+        .collect();
+
+    let start = Instant::now();
+    let result: anyhow::Result<Vec<usize>> = async {
+        let query_vec = client.embed_query(query).await?;
+        let doc_vecs = client
+            .embed(&docs, crate::embedding::InputType::Document)
+            .await?;
+        let mut scored: Vec<(usize, f32)> = doc_vecs
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (i, cosine_similarity(&query_vec, v)))
+            .collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        Ok(scored.into_iter().map(|(i, _)| i).collect())
+    }
+    .await;
+    let elapsed_ms = start.elapsed().as_millis() as u64;
+
+    match result {
+        Ok(order) => RerankOutput {
+            reranked_indices: order,
+            line_selections: vec![None; n],
+            raw_request: format!("embedding-similarity rerank: model={} docs={n}", client.model()),
+            raw_response: String::new(),
+            elapsed_ms,
+            fallback_used: false,
+            skip_reason: None,
+        },
+        Err(e) => {
+            warn!(error = %e, "embedding rerank failed, using fallback order");
+            RerankOutput {
+                reranked_indices: all_indices,
+                line_selections: vec![None; n],
+                raw_request: String::new(),
+                raw_response: String::new(),
+                elapsed_ms,
+                fallback_used: true,
+                skip_reason: Some(format!("embedding rerank failed: {e}")),
+            }
+        }
+    }
+}
+
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let (mut dot, mut na, mut nb) = (0.0f32, 0.0f32, 0.0f32);
+    for (x, y) in a.iter().zip(b) {
+        dot += x * y;
+        na += x * x;
+        nb += y * y;
+    }
+    if na == 0.0 || nb == 0.0 {
+        0.0
+    } else {
+        dot / (na.sqrt() * nb.sqrt())
+    }
+}
+
 // ─── Agentic RAG rerank ──────────────────────────────────────────────────
 
 const AGENTIC_HISTORY_BYTE_CAP: usize = 1_000_000;

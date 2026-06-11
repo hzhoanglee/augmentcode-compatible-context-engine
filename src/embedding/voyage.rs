@@ -7,41 +7,21 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
+use crate::config::{EmbeddingConfig, RerankConfig};
 use crate::embedding::InputType;
 
 const VOYAGE_ENDPOINT: &str = "https://api.voyageai.com/v1/embeddings";
 pub const MAX_BATCH_SIZE: usize = 128;
-
-/// Resolve the embeddings URL from an optional user-supplied base.
-///
-/// Normalization rules (mirrors `llm::openai::chat_url`):
-///   * `None`, empty, or whitespace-only → `VOYAGE_ENDPOINT`.
-///   * Trim whitespace, then strip a trailing `/`.
-///   * If the path already ends in `/embeddings`, keep it as-is.
-///   * Otherwise append `/embeddings`.
-pub fn voyage_url(base: Option<&str>) -> String {
-    let raw = match base {
-        Some(s) => s.trim(),
-        None => "",
-    };
-    if raw.is_empty() {
-        return VOYAGE_ENDPOINT.to_owned();
-    }
-    let trimmed = raw.trim_end_matches('/');
-    if trimmed.ends_with("/embeddings") {
-        trimmed.to_owned()
-    } else {
-        format!("{trimmed}/embeddings")
-    }
-}
-
 // ─── Request / response shapes ────────────────────────────────────────────
 
 #[derive(Serialize)]
 struct EmbedRequest<'a> {
     model: &'a str,
     input: &'a [String],
-    input_type: &'a str,
+    /// Voyage-specific; omitted for OpenAI-compatible endpoints, which reject
+    /// unknown fields or ignore the distinction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    input_type: Option<&'a str>,
 }
 
 #[derive(Deserialize)]
@@ -68,17 +48,102 @@ struct VoyageInner {
     query_http: Client,
     model: String,
     api_keys: Vec<String>,
-    /// Resolved embeddings endpoint URL.
+    /// Resolved embeddings endpoint URL. Voyage's official endpoint by default;
+    /// any OpenAI-compatible `…/v1/embeddings` when `provider == "openai"`.
     endpoint: String,
+    /// Voyage accepts an `input_type` hint (document vs query); OpenAI-compatible
+    /// servers don't, so the field is omitted there.
+    send_input_type: bool,
+    /// Max texts per request — providers enforce different input caps
+    /// (Voyage 128, BytePlus Ark 10, …).
+    batch_size: usize,
     /// Round-robin cursor — atomically advanced on each batch call.
     key_cursor: AtomicUsize,
 }
 
+/// Normalize a user-supplied base URL into a full embeddings endpoint.
+/// Accepts the base form (`http://host:1234/v1`, with or without trailing
+/// slash) or the full `…/embeddings` URL.
+fn embeddings_url(base: &str) -> String {
+    let trimmed = base.trim().trim_end_matches('/');
+    if trimmed.ends_with("/embeddings") {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}/embeddings")
+    }
+}
+
 impl VoyageClient {
-    /// Create a new client. Returns `Err` if `api_keys` is empty.
-    pub fn new(model: String, api_keys: Vec<String>, base_url: Option<&str>) -> Result<Self> {
+    /// Create a client from the embedding settings. Returns `Err` if `api_keys`
+    /// is empty. `provider == "openai"` (with `base_url`) targets any
+    /// OpenAI-compatible /v1/embeddings endpoint; anything else is Voyage.
+    pub fn from_config(config: &EmbeddingConfig) -> Result<Self> {
+        let openai = config.provider == "openai";
+        let endpoint = if openai {
+            let base = config
+                .base_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| anyhow::anyhow!(
+                    "embedding provider 'openai' requires base_url (e.g. http://host:1234/v1)"
+                ))?;
+            embeddings_url(base)
+        } else {
+            VOYAGE_ENDPOINT.to_string()
+        };
+        // OpenAI-compatible local servers may run without auth — substitute one
+        // empty key, which suppresses the Authorization header per request.
+        let keys = if openai && config.api_keys.is_empty() {
+            vec![String::new()]
+        } else {
+            config.api_keys.clone()
+        };
+        Self::with_endpoint(
+            config.model.clone(),
+            keys,
+            endpoint,
+            !openai,
+            config.embed_batch_size.clamp(1, MAX_BATCH_SIZE),
+        )
+    }
+
+    /// Back-compat constructor: official Voyage endpoint.
+    pub fn new(model: String, api_keys: Vec<String>) -> Result<Self> {
+        Self::with_endpoint(model, api_keys, VOYAGE_ENDPOINT.to_string(), true, MAX_BATCH_SIZE)
+    }
+
+    /// Client for the embedding-similarity reranker (LM Studio / any
+    /// OpenAI-compatible /v1/embeddings server). Unlike the main embedding
+    /// client, API keys may be empty — local servers often run without auth —
+    /// in which case requests carry an empty bearer token.
+    pub fn from_rerank_config(config: &RerankConfig) -> Result<Self> {
+        let base = config
+            .base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("rerank requires base_url (e.g. http://host:1234/v1)"))?;
+        let keys = if config.api_keys.is_empty() {
+            vec![String::new()]
+        } else {
+            config.api_keys.clone()
+        };
+        // Conservative batch size: rerank candidate sets are small (~top_k), and
+        // some gateways cap embeddings input at 10 — a few extra requests cost
+        // little next to a wrong 400.
+        Self::with_endpoint(config.model.clone(), keys, embeddings_url(base), false, 10)
+    }
+
+    fn with_endpoint(
+        model: String,
+        api_keys: Vec<String>,
+        endpoint: String,
+        send_input_type: bool,
+        batch_size: usize,
+    ) -> Result<Self> {
         if api_keys.is_empty() {
-            bail!("VoyageAI client requires at least one API key");
+            bail!("embedding client requires at least one API key");
         }
         let http = Client::builder()
             .timeout(Duration::from_secs(120))
@@ -88,7 +153,6 @@ impl VoyageClient {
             .timeout(Duration::from_secs(30))
             .build()
             .context("build query reqwest client")?;
-        let endpoint = voyage_url(base_url);
         Ok(Self {
             inner: Arc::new(VoyageInner {
                 http,
@@ -96,6 +160,8 @@ impl VoyageClient {
                 model,
                 api_keys,
                 endpoint,
+                send_input_type,
+                batch_size: batch_size.max(1),
                 key_cursor: AtomicUsize::new(0),
             }),
         })
@@ -123,17 +189,17 @@ impl VoyageClient {
                 Ok(mut embeddings) => {
                     return embeddings
                         .pop()
-                        .ok_or_else(|| anyhow::anyhow!("VoyageAI returned empty embeddings"));
+                        .ok_or_else(|| anyhow::anyhow!("embedding API returned empty embeddings"));
                 }
                 Err(EmbedError::RateLimited) => {
-                    warn!(key_index = key_idx, "VoyageAI 429 on query embed — trying next key");
+                    warn!(key_index = key_idx, "embedding API 429 on query embed — trying next key");
                 }
                 Err(EmbedError::Other(e)) => return Err(e),
             }
         }
 
         // All keys 429 — one backoff attempt (2 s), then return Err.
-        warn!("all VoyageAI keys rate-limited on query embed; backing off 2s");
+        warn!("all embedding API keys rate-limited on query embed; backing off 2s");
         tokio::time::sleep(Duration::from_secs(2)).await;
 
         for offset in 0..n_keys {
@@ -143,29 +209,44 @@ impl VoyageClient {
                 Ok(mut embeddings) => {
                     return embeddings
                         .pop()
-                        .ok_or_else(|| anyhow::anyhow!("VoyageAI returned empty embeddings"));
+                        .ok_or_else(|| anyhow::anyhow!("embedding API returned empty embeddings"));
                 }
                 Err(EmbedError::RateLimited) => continue,
                 Err(EmbedError::Other(e)) => return Err(e),
             }
         }
 
-        anyhow::bail!("VoyageAI query embed still rate-limited after backoff")
+        anyhow::bail!("embedding API query embed still rate-limited after backoff")
     }
 
-    /// Embed texts in batches of up to 128. Returns one Vec<f32> per input.
+    /// Embed texts in batches of up to the configured batch size.
+    /// Returns one Vec<f32> per input.
     pub async fn embed(&self, texts: &[String], input_type: InputType) -> Result<Vec<Vec<f32>>> {
         let mut all_embeddings = Vec::with_capacity(texts.len());
-        for batch in texts.chunks(MAX_BATCH_SIZE) {
+        for batch in texts.chunks(self.inner.batch_size) {
             let embeddings = self.embed_batch(batch, input_type).await?;
             all_embeddings.extend(embeddings);
         }
         Ok(all_embeddings)
     }
 
-    /// Embed a batch of up to `MAX_BATCH_SIZE` texts. Public so the pipeline can
-    /// drive batching manually and report per-batch progress between awaits.
+    /// Embed one provider-request batch, splitting internally if `texts`
+    /// exceeds the configured batch size. Public so the pipeline can drive
+    /// batching manually and report per-batch progress between awaits.
     pub async fn embed_batch(&self, texts: &[String], input_type: InputType) -> Result<Vec<Vec<f32>>> {
+        if texts.len() > self.inner.batch_size {
+            // Callers may chunk by the old 128 constant — re-split to the
+            // provider's real cap rather than 400ing.
+            let mut all = Vec::with_capacity(texts.len());
+            for sub in texts.chunks(self.inner.batch_size) {
+                all.extend(self.embed_one_request(sub, input_type).await?);
+            }
+            return Ok(all);
+        }
+        self.embed_one_request(texts, input_type).await
+    }
+
+    async fn embed_one_request(&self, texts: &[String], input_type: InputType) -> Result<Vec<Vec<f32>>> {
         let n_keys = self.inner.api_keys.len();
         let start_cursor = self.inner.key_cursor.fetch_add(1, Ordering::Relaxed) % n_keys;
 
@@ -177,7 +258,7 @@ impl VoyageClient {
             match self.try_embed_with_key(key, texts, input_type).await {
                 Ok(embeddings) => return Ok(embeddings),
                 Err(EmbedError::RateLimited) => {
-                    warn!(key_index = key_idx, "VoyageAI 429 — trying next key");
+                    warn!(key_index = key_idx, "embedding API 429 — trying next key");
                 }
                 // Non-429 error: abort immediately, old data untouched.
                 Err(EmbedError::Other(e)) => return Err(e),
@@ -189,7 +270,7 @@ impl VoyageClient {
         loop {
             warn!(
                 delay_secs = delay_secs,
-                "all VoyageAI keys rate-limited; backing off"
+                "all embedding API keys rate-limited; backing off"
             );
             tokio::time::sleep(Duration::from_secs(delay_secs)).await;
 
@@ -198,7 +279,7 @@ impl VoyageClient {
                 let key = &self.inner.api_keys[key_idx];
                 match self.try_embed_with_key(key, texts, input_type).await {
                     Ok(embeddings) => {
-                        info!("VoyageAI embed succeeded after backoff");
+                        info!("embedding API call succeeded after backoff");
                         return Ok(embeddings);
                     }
                     Err(EmbedError::RateLimited) => continue,
@@ -238,13 +319,16 @@ impl VoyageClient {
         let body = EmbedRequest {
             model: &self.inner.model,
             input: texts,
-            input_type: input_type.as_str(),
+            input_type: self.inner.send_input_type.then(|| input_type.as_str()),
         };
 
-        let response = client
-            .post(&self.inner.endpoint)
-            .bearer_auth(key)
-            .json(&body)
+        let mut req = client.post(&self.inner.endpoint).json(&body);
+        // Skip the Authorization header for empty keys (unauthenticated local
+        // servers reject malformed bearer tokens rather than ignoring them).
+        if !key.is_empty() {
+            req = req.bearer_auth(key);
+        }
+        let response = req
             .send()
             .await
             .map_err(|e| EmbedError::Other(e.into()))?;
@@ -258,7 +342,7 @@ impl VoyageClient {
         if !status.is_success() {
             let text = response.text().await.unwrap_or_default();
             return Err(EmbedError::Other(anyhow::anyhow!(
-                "VoyageAI error {}: {}",
+                "embedding API error {}: {}",
                 status,
                 text
             )));
@@ -276,57 +360,4 @@ impl VoyageClient {
 enum EmbedError {
     RateLimited,
     Other(anyhow::Error),
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn voyage_url_default_when_none() {
-        assert_eq!(voyage_url(None), VOYAGE_ENDPOINT);
-    }
-
-    #[test]
-    fn voyage_url_default_when_blank() {
-        assert_eq!(voyage_url(Some("")), VOYAGE_ENDPOINT);
-        assert_eq!(voyage_url(Some("   ")), VOYAGE_ENDPOINT);
-        assert_eq!(voyage_url(Some("\t\n")), VOYAGE_ENDPOINT);
-    }
-
-    #[test]
-    fn voyage_url_appends_to_base() {
-        assert_eq!(
-            voyage_url(Some("https://my-proxy.com/v1")),
-            "https://my-proxy.com/v1/embeddings"
-        );
-        assert_eq!(
-            voyage_url(Some("http://localhost:8080/api/v1")),
-            "http://localhost:8080/api/v1/embeddings"
-        );
-    }
-
-    #[test]
-    fn voyage_url_strips_trailing_slash() {
-        assert_eq!(
-            voyage_url(Some("https://my-proxy.com/v1/")),
-            "https://my-proxy.com/v1/embeddings"
-        );
-    }
-
-    #[test]
-    fn voyage_url_accepts_full_form() {
-        assert_eq!(
-            voyage_url(Some("https://my-proxy.com/v1/embeddings")),
-            "https://my-proxy.com/v1/embeddings"
-        );
-    }
-
-    #[test]
-    fn voyage_url_accepts_full_form_trailing_slash() {
-        assert_eq!(
-            voyage_url(Some("https://my-proxy.com/v1/embeddings/")),
-            "https://my-proxy.com/v1/embeddings"
-        );
-    }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "context-engine-rs"
-version = "0.1.31"
+version = "0.1.30"
 edition = "2024"
 
 [dependencies]
